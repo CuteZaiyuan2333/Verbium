@@ -40,10 +40,22 @@ impl Plugin for CorePlugin {
         }
     }
 
-    fn on_menu_bar(&mut self, ui: &mut Ui, _control: &mut Vec<AppCommand>) {
+    fn on_menu_bar(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
+        ui.menu_button("Edit", |ui| {
+             if ui.button("Settings").clicked() {
+                 control.push(AppCommand::ToggleSettings);
+                 ui.close_menu();
+             }
+        });
+
         if ui.button("About").clicked() {
             self.show_about = true;
         }
+    }
+    
+    fn on_settings_ui(&mut self, ui: &mut Ui) {
+        ui.label("Core System Settings");
+        ui.label("Manage global application preferences here.");
     }
 
     fn on_global_ui(&mut self, ctx: &egui::Context, _control: &mut Vec<AppCommand>) {

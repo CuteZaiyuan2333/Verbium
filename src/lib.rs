@@ -65,6 +65,10 @@ pub enum AppCommand {
     ResetLayout,
     /// 关闭指定标题的标签页（简单示例）
     CloseTab(String),
+    /// 请求打开指定路径的文件
+    OpenFile(std::path::PathBuf),
+    /// 切换设置窗口
+    ToggleSettings,
 }
 
 // ----------------------------------------------------------------------------
@@ -79,6 +83,15 @@ pub trait Plugin {
     fn dependencies(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// 尝试打开文件
+    /// 如果插件支持该文件类型，返回一个新的 Tab 实例；否则返回 None
+    fn try_open_file(&mut self, _path: &std::path::Path) -> Option<Box<dyn TabInstance>> {
+        None
+    }
+
+    /// 注入到设置窗口的 UI
+    fn on_settings_ui(&mut self, _ui: &mut Ui) {}
     
     /// 注入到 "File" 菜单的内容
     fn on_file_menu(&mut self, _ui: &mut Ui, _control: &mut Vec<AppCommand>) {}

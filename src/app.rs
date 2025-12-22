@@ -43,6 +43,7 @@ pub struct VerbiumApp {
     dock_state: DockState<Tab>,
     plugins: Vec<Box<dyn Plugin>>,
     command_queue: Vec<AppCommand>,
+    show_settings: bool,
 }
 
 impl VerbiumApp {
@@ -55,6 +56,7 @@ impl VerbiumApp {
             dock_state,
             plugins,
             command_queue: Vec::new(),
+            show_settings: false,
         };
         app
     }
@@ -85,6 +87,17 @@ impl VerbiumApp {
                     self.dock_state.retain_tabs(|tab| {
                         tab.instance.title().text() != title
                     });
+                }
+                AppCommand::OpenFile(path) => {
+                    for plugin in &mut self.plugins {
+                        if let Some(instance) = plugin.try_open_file(path) {
+                            self.dock_state.main_surface_mut().push_to_focused_leaf(Tab::new(instance));
+                            break;
+                        }
+                    }
+                }
+                AppCommand::ToggleSettings => {
+                    self.show_settings = !self.show_settings;
                 }
             }
             i += 1;
@@ -127,6 +140,24 @@ impl eframe::App for VerbiumApp {
         // 3. 全局 UI
         for plugin in &mut self.plugins {
             plugin.on_global_ui(ctx, &mut self.command_queue);
+        }
+
+        // Settings Window
+        if self.show_settings {
+            egui::Window::new("Settings")
+                .open(&mut self.show_settings)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for plugin in &mut self.plugins {
+                            let plugin_name = plugin.name().to_string();
+                            ui.push_id(&plugin_name, |ui| {
+                                ui.collapsing(&plugin_name, |ui| {
+                                    plugin.on_settings_ui(ui);
+                                });
+                            });
+                        }
+                    });
+                });
         }
 
         // 4. 处理指令

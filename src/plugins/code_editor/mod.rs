@@ -76,6 +76,26 @@ impl Plugin for CodeEditorPlugin {
         vec!["core".to_string()]
     }
 
+    fn try_open_file(&mut self, path: &std::path::Path) -> Option<Box<dyn TabInstance>> {
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        // 简单的白名单检查
+        if ["rs", "toml", "txt", "md", "json", "js", "html", "css", "py", "c", "cpp"].contains(&ext) {
+             if let Ok(content) = std::fs::read_to_string(path) {
+                 return Some(Box::new(CodeEditorTab {
+                     name: path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                     code: content,
+                     language: ext.to_string(),
+                 }));
+             }
+        }
+        None
+    }
+
+    fn on_settings_ui(&mut self, ui: &mut Ui) {
+        ui.label("Editor Settings Placeholder");
+        ui.label("Here you could configure font size, theme, etc.");
+    }
+
     fn on_tab_menu(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
         if ui.button("Code Editor").clicked() {
             control.push(AppCommand::OpenTab(Tab::new(Box::new(CodeEditorTab {

@@ -22,7 +22,7 @@ impl FileExplorerTab {
         }
     }
 
-    fn render_tree(&mut self, ui: &mut Ui, path: PathBuf) {
+    fn render_tree(&mut self, ui: &mut Ui, path: PathBuf, control: &mut Vec<AppCommand>) {
         let name = path.file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "/".to_string());
@@ -31,7 +31,7 @@ impl FileExplorerTab {
             let is_expanded = self.expanded_nodes.contains(&path);
             
             let header = CollapsingHeader::new(format!("📁 {}", name))
-                .id_salt(&path) // Updated from id_source to id_salt
+                .id_salt(&path)
                 .open(Some(is_expanded));
 
             let response = header.show(ui, |ui| {
@@ -49,7 +49,7 @@ impl FileExplorerTab {
                     });
 
                     for child_path in paths {
-                        self.render_tree(ui, child_path);
+                        self.render_tree(ui, child_path, control);
                     }
                 }
             });
@@ -65,8 +65,8 @@ impl FileExplorerTab {
             // File display
             ui.horizontal(|ui| {
                 ui.add_space(16.0); // Indentation
-                if ui.selectable_label(false, format!("📄 {}", name)).clicked() {
-                    println!("Selected file: {:?}", path);
+                if ui.selectable_label(false, format!("📄 {}", name)).double_clicked() {
+                    control.push(AppCommand::OpenFile(path.clone()));
                 }
             });
         }
@@ -82,7 +82,7 @@ impl TabInstance for FileExplorerTab {
         }
     }
 
-    fn ui(&mut self, ui: &mut Ui, _control: &mut Vec<AppCommand>) {
+    fn ui(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
         ui.vertical(|ui| {
             // Toolbar
             ui.horizontal(|ui| {
@@ -107,7 +107,7 @@ impl TabInstance for FileExplorerTab {
             // Content
             if let Some(root) = self.root_path.clone() {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.render_tree(ui, root);
+                    self.render_tree(ui, root, control);
                 });
             } else {
                 ui.centered_and_justified(|ui| {
