@@ -14,13 +14,13 @@ fn main() {
             if path.is_dir() {
                 let name = path.file_name().unwrap().to_str().unwrap();
                 if name != "core" && name != "generated" {
-                    plugin_mods.push_str("pub mod ");
-                    plugin_mods.push_str(name);
-                    plugin_mods.push_str(";\n");
+                    // 生成条件编译标签，格式为 plugin_插件文件夹名
+                    let feature_gate = format!("#[cfg(feature = \"plugin_{}\")]", name);
+                    
+                    plugin_mods.push_str(&format!("{}\npub mod {};\n", feature_gate, name));
 
-                    plugin_creations.push_str("        Box::new(");
-                    plugin_creations.push_str(name);
-                    plugin_creations.push_str("::create()),\n");
+                    plugin_creations.push_str(&format!("        {}\n", feature_gate));
+                    plugin_creations.push_str(&format!("        Box::new({}::create()),\n", name));
                 }
             }
         }
@@ -33,7 +33,8 @@ fn main() {
     content.push_str("    vec![\n");
     content.push_str(&plugin_creations);
     content.push_str("    ]\n");
-    content.push_str("}\n");
+    content.push_str("}
+");
 
     fs::write(dest_path, content).unwrap();
     println!("cargo:rerun-if-changed={}", plugins_dir);

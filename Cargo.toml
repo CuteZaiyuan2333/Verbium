@@ -6,4 +6,17 @@ edition = "2021"
 [dependencies]
 eframe = "0.29.1"
 egui = "0.29.1"
-egui_dock = "0.14.0" # Compatible with egui 0.29
+egui_dock = "0.14.0"
+
+# --- BEGIN PLUGIN DEPENDENCIES ---
+# Launcher 模拟注入：因为 CodeEditor 需要，我们手动加上
+egui_extras = { version = "0.29.1", features = ["syntect"] }
+# --- END PLUGIN DEPENDENCIES ---
+
+[features]
+default = ["plugin_test_plugin", "plugin_code_editor"]
+
+# --- BEGIN PLUGIN FEATURES ---
+plugin_test_plugin = []
+plugin_code_editor = []
+# --- END PLUGIN FEATURES ---
