@@ -48,11 +48,11 @@ impl Plugin for CorePlugin {
         if ui.button("New Editor").clicked() {
             let name = format!("Untitled-{}", self.new_file_counter);
             self.new_file_counter += 1;
-            control.push(AppCommand::OpenTab(Tab(Box::new(EditorTab { name, content: String::new() }))));
+            control.push(AppCommand::OpenTab(Tab::new(Box::new(EditorTab { name, content: String::new() }))));
             ui.close_menu();
         }
         if ui.button("New Empty Tab").clicked() {
-            control.push(AppCommand::OpenTab(Tab(Box::new(EmptyTab))));
+            control.push(AppCommand::OpenTab(Tab::new(Box::new(EmptyTab))));
             ui.close_menu();
         }
         ui.separator();

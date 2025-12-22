@@ -1,8 +1,11 @@
 use egui::{Ui, WidgetText, Context};
 use std::fmt::Debug;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub mod plugins;
 pub mod app;
+
+static NEXT_TAB_ID: AtomicU64 = AtomicU64::new(1);
 
 // ----------------------------------------------------------------------------
 // Tab 抽象
@@ -17,17 +20,35 @@ pub trait TabInstance: Debug + Send + Sync {
 }
 
 /// 包装器，用于在 egui_dock 中持有动态生成的 Tab
-pub struct Tab(pub Box<dyn TabInstance>);
+pub struct Tab {
+    pub instance: Box<dyn TabInstance>,
+    pub id: u64,
+}
+
+impl Tab {
+    pub fn new(instance: Box<dyn TabInstance>) -> Self {
+        Self {
+            instance,
+            id: NEXT_TAB_ID.fetch_add(1, Ordering::SeqCst),
+        }
+    }
+}
 
 impl Clone for Tab {
     fn clone(&self) -> Self {
-        Tab(self.0.box_clone())
+        Tab {
+            instance: self.instance.box_clone(),
+            id: self.id,
+        }
     }
 }
 
 impl Debug for Tab {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Tab").field("title", &self.0.title().text()).finish()
+        f.debug_struct("Tab")
+            .field("id", &self.id)
+            .field("title", &self.instance.title().text())
+            .finish()
     }
 }
 

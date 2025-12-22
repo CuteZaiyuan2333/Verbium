@@ -13,12 +13,18 @@ struct VerbiumTabViewer<'a> {
 impl<'a> TabViewer for VerbiumTabViewer<'a> {
     type Tab = Tab;
 
+    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
+        egui::Id::new(tab.id)
+    }
+
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        tab.0.title()
+        tab.instance.title()
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        tab.0.ui(ui, self.command_queue);
+        ui.push_id(tab.id, |ui| {
+            tab.instance.ui(ui, self.command_queue);
+        });
     }
 
     fn closeable(&mut self, _tab: &mut Self::Tab) -> bool {
@@ -45,7 +51,7 @@ impl VerbiumApp {
         // 使用自动化注册函数
         let plugins = plugins::all_plugins();
 
-        let mut app = Self {
+        let app = Self {
             dock_state,
             plugins,
             command_queue: Vec::new(),
@@ -77,7 +83,7 @@ impl VerbiumApp {
                 }
                 AppCommand::CloseTab(title) => {
                     self.dock_state.retain_tabs(|tab| {
-                        tab.0.title().text() != title
+                        tab.instance.title().text() != title
                     });
                 }
             }

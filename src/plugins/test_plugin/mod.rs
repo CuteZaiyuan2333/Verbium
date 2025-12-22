@@ -33,7 +33,7 @@ impl Plugin for TestPlugin {
 
     fn on_tab_menu(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
         if ui.button("TESTTAB").clicked() {
-            control.push(AppCommand::OpenTab(Tab(Box::new(TestTab {
+            control.push(AppCommand::OpenTab(Tab::new(Box::new(TestTab {
                 text: "Hello from plugin!".into(),
             }))));
             ui.close_menu();
