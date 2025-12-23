@@ -37,6 +37,54 @@ impl<'a> TabViewer for VerbiumTabViewer<'a> {
 }
 
 // ----------------------------------------------------------------------------
+// Font Setup
+// ----------------------------------------------------------------------------
+
+fn setup_custom_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    // 尝试加载系统字体以支持中文
+    // 优先寻找常见的系统路径
+    let mut font_loaded = false;
+
+    #[cfg(target_os = "windows")]
+    {
+        let windows_fonts = [
+            "C:\\Windows\\Fonts\\msyh.ttc",   // 微软雅黑
+            "C:\\Windows\\Fonts\\msyh.ttf",
+            "C:\\Windows\\Fonts\\simsun.ttc", // 宋体
+            "C:\\Windows\\Fonts\\simsun.ttf",
+        ];
+
+        for path in windows_fonts {
+            if std::path::Path::new(path).exists() {
+                if let Ok(font_data) = std::fs::read(path) {
+                    fonts.font_data.insert(
+                        "chinese_font".to_owned(),
+                        egui::FontData::from_owned(font_data),
+                    );
+                    font_loaded = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 如果加载成功，将其设为备选字体
+    if font_loaded {
+        if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            vec.push("chinese_font".to_owned());
+        }
+        if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+            vec.push("chinese_font".to_owned());
+        }
+    }
+
+    // 设置字体
+    ctx.set_fonts(fonts);
+}
+
+// ----------------------------------------------------------------------------
 // Main Application State
 // ----------------------------------------------------------------------------
 pub struct VerbiumApp {
@@ -47,7 +95,8 @@ pub struct VerbiumApp {
 }
 
 impl VerbiumApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        setup_custom_fonts(&cc.egui_ctx);
         let dock_state = DockState::new(Vec::new());
         // 使用自动化注册函数
         let plugins = plugins::all_plugins();
