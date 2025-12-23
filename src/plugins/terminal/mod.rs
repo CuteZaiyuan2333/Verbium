@@ -434,6 +434,8 @@ pub struct TerminalTab {
     last_size: (usize, usize),
     scroll_offset: usize,
     ctx: egui::Context,
+    input_buffer: String,
+    is_composing: bool,
 }
 
 impl std::fmt::Debug for TerminalTab {
@@ -451,6 +453,8 @@ impl Clone for TerminalTab {
             last_size: self.last_size,
             scroll_offset: self.scroll_offset,
             ctx: self.ctx.clone(),
+            input_buffer: String::new(),
+            is_composing: false,
         }
     }
 }
@@ -466,13 +470,15 @@ impl TabInstance for TerminalTab {
             Vec2::new(width, height)
         });
 
+        // Reserve space for the terminal
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         
+        // Focus handling: Click to focus
         if response.clicked() {
             ui.memory_mut(|m| m.request_focus(response.id));
         }
 
-        // Resize
+        // Resize PTY if needed
         let cols = (rect.width() / char_size.x).floor() as usize;
         let rows = (rect.height() / char_size.y).floor() as usize;
         if cols > 0 && rows > 0 && (cols != self.last_size.0 || rows != self.last_size.1) {
@@ -486,19 +492,93 @@ impl TabInstance for TerminalTab {
             self.last_size = (cols, rows);
         }
 
-        // Input
-        if response.has_focus() {
-            let mut writer = self.writer.lock();
-            let mut state = self.state.lock();
-            let is_app_mode = state.application_cursor;
+        // --------------------------------------------------------------------
+        // Invisible Input Overlay
+        // --------------------------------------------------------------------
+        // We place a transparent TextEdit over the terminal area. 
+        // This widget will capture focus, IME input, and arrow keys (preventing focus loss).
+        
+        let mut output_to_write = String::new();
 
+        // Position the TextEdit exactly over the allocated rect
+        let input_response = ui.put(
+            rect,
+            egui::TextEdit::multiline(&mut self.input_buffer)
+                .id_source(response.id) // Use the same ID to share focus logic
+                .frame(false)
+                .text_color(Color32::TRANSPARENT)
+                .cursor_at_end(true)
+                .lock_focus(true) // Keep focus if possible
+                .desired_width(f32::INFINITY)
+        );
+
+        // If the user clicks the rect (which is now covered by TextEdit), ensure focus.
+        if input_response.clicked() {
+            input_response.request_focus();
+        }
+
+        if input_response.has_focus() {
+            let mut writer = self.writer.lock();
+            let state = self.state.lock();
+            let is_app_mode = state.application_cursor;
+            drop(state); // Unlock early
+
+            // 1. Check IME State & Gather Events
+            // We use a separate loop to scan events because we need to handle them in order 
+            // and we shouldn't rely on TextEdit's buffer for the actual input content 
+            // (it contains intermediate IME states).
+            
             ui.input(|i| {
                 for event in &i.events {
                     match event {
-                        egui::Event::Text(t) => {
-                            let _ = writer.write_all(t.as_bytes());
+                        egui::Event::Ime(ime_event) => {
+                            match ime_event {
+                                egui::ImeEvent::Preedit(text) => {
+                                    self.is_composing = !text.is_empty();
+                                }
+                                egui::ImeEvent::Commit(text) => {
+                                    self.is_composing = false;
+                                    output_to_write.push_str(&text);
+                                }
+                                egui::ImeEvent::Disabled => {
+                                    self.is_composing = false;
+                                }
+                                _ => {}
+                            }
                         }
+                        
+                        egui::Event::Text(text) => {
+                            // If text is a single control char that we handle via Keys, ignore it.
+                            // This avoids double input for Enter (\n) and Tab (\t).
+                            let is_handled_control = if text.len() == 1 {
+                                let c = text.chars().next().unwrap();
+                                c == '\n' || c == '\r' || c == '\t' || c == '\x08' || c == '\x7f'
+                            } else {
+                                false
+                            };
+
+                            if !is_handled_control {
+                                // For paste or normal text, we send it.
+                                // We convert newlines to \r to ensure correct terminal behavior.
+                                let fixed_text = text.replace("\n", "\r");
+                                output_to_write.push_str(&fixed_text);
+                            }
+                        }
+
                         egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                            // If we are composing, we generally want to ignore raw keys 
+                            // (like arrows moving candidate selection), BUT some IMEs 
+                            // might not consume all keys. 
+                            // However, the safe bet for a terminal is: if composing, 
+                            // ignore navigation keys to prevent terminal cursor jumping.
+                            
+                            if self.is_composing {
+                                // Exception: Maybe we shouldn't ignore ALL keys?
+                                // But for now, ignoring Special keys during composition is the fix for the "Arrow" bug.
+                                // Normal keys (A-Z) are not handled here anyway.
+                                continue;
+                            }
+
                             let seq = match key {
                                 Key::Enter => Some("\r".to_string()),
                                 Key::Backspace => Some("\x7f".to_string()),
@@ -508,6 +588,13 @@ impl TabInstance for TerminalTab {
                                 Key::ArrowDown => Some(if is_app_mode { "\x1bOB" } else { "\x1b[B" }.to_string()),
                                 Key::ArrowRight => Some(if is_app_mode { "\x1bOC" } else { "\x1b[C" }.to_string()),
                                 Key::ArrowLeft => Some(if is_app_mode { "\x1bOD" } else { "\x1b[D" }.to_string()),
+                                Key::Home => Some(if is_app_mode { "\x1bOH" } else { "\x1b[H" }.to_string()),
+                                Key::End => Some(if is_app_mode { "\x1bOF" } else { "\x1b[F" }.to_string()),
+                                Key::PageUp => Some("\x1b[5~".to_string()),
+                                Key::PageDown => Some("\x1b[6~".to_string()),
+                                Key::Insert => Some("\x1b[2~".to_string()),
+                                Key::Delete => Some("\x1b[3~".to_string()),
+                                
                                 _ if modifiers.ctrl => {
                                     let k = format!("{:?}", key);
                                     if k.len() == 1 {
@@ -527,15 +614,25 @@ impl TabInstance for TerminalTab {
                                 }
                                 _ => None,
                             };
+
                             if let Some(s) = seq {
-                                let _ = writer.write_all(s.as_bytes());
+                                output_to_write.push_str(&s);
                             }
                         }
-                        _ => {} // Ignore other events
+                        _ => {}
                     }
                 }
             });
-            state.dirty = false;
+
+            // Clean the dummy buffer only when not composing to prevent infinite growth
+            // but preserve it during composition so egui can do its preview thing.
+            if !self.is_composing {
+                self.input_buffer.clear();
+            }
+
+            if !output_to_write.is_empty() {
+                let _ = writer.write_all(output_to_write.as_bytes());
+            }
         }
 
         // Scrolling
@@ -706,6 +803,8 @@ fn create_terminal_tab(ctx: egui::Context) -> anyhow::Result<TerminalTab> {
         last_size: (80, 24),
         scroll_offset: 0,
         ctx,
+        input_buffer: String::new(),
+        is_composing: false,
     })
 }
 
