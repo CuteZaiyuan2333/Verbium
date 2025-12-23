@@ -486,24 +486,16 @@ impl TabInstance for TerminalTab {
             self.last_size = (cols, rows);
         }
 
-        // Input & IME Position
+        // Input
         if response.has_focus() {
             let mut writer = self.writer.lock();
             let mut state = self.state.lock();
             let is_app_mode = state.application_cursor;
 
-            // 更新输入法窗口位置 (IMERect)
-            let cursor_pos = rect.min + Vec2::new(state.cursor_col as f32 * char_size.x, state.cursor_row as f32 * char_size.y);
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::IMEAllowed(true));
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::IMERect(Rect::from_min_size(cursor_pos, char_size)));
-
             ui.input(|i| {
                 for event in &i.events {
                     match event {
                         egui::Event::Text(t) => {
-                            let _ = writer.write_all(t.as_bytes());
-                        }
-                        egui::Event::Ime(egui::ImeEvent::Commit(t)) => {
                             let _ = writer.write_all(t.as_bytes());
                         }
                         egui::Event::Key { key, pressed: true, modifiers, .. } => {
@@ -539,7 +531,7 @@ impl TabInstance for TerminalTab {
                                 let _ = writer.write_all(s.as_bytes());
                             }
                         }
-                        _ => {}
+                        _ => {} // Ignore other events
                     }
                 }
             });
@@ -645,6 +637,7 @@ impl TabInstance for TerminalTab {
                 painter.rect_filled(Rect::from_min_size(cursor_pos, char_size), 0.0, Color32::from_gray(200).linear_multiply(0.5));
             }
         }
+        ui.ctx().request_repaint();
     }
 
     fn box_clone(&self) -> Box<dyn TabInstance> {
