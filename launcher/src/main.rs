@@ -24,8 +24,11 @@ struct PluginMeta {
 struct PluginInfo {
     name: String,
     display_name: String,
+    #[allow(dead_code)]
     version: String,
+    #[allow(dead_code)]
     author: String,
+    #[allow(dead_code)]
     description: String,
 }
 
@@ -103,6 +106,7 @@ impl LauncherApp {
         }
     }
 
+    #[allow(dead_code)]
     fn is_plugin_enabled_in_cargo(&self, id: &str) -> bool {
         let Some(main_dir) = &self.config.project_dir else { return false; };
         let cargo_path = main_dir.join("Cargo.toml");

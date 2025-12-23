@@ -1,7 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::collections::HashSet;
 use egui::{Ui, WidgetText, CollapsingHeader};
-use walkdir::WalkDir;
 use crate::{Plugin, AppCommand, TabInstance, Tab};
 
 // ----------------------------------------------------------------------------

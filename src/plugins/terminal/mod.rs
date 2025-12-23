@@ -500,6 +500,9 @@ pub struct TerminalTab {
     ctx: egui::Context,
     input_buffer: String,
     is_composing: bool,
+    selection_start: Option<(usize, usize)>,
+    selection_end: Option<(usize, usize)>,
+    drag_start: Option<(usize, usize)>,
 }
 
 impl std::fmt::Debug for TerminalTab {
@@ -519,6 +522,9 @@ impl Clone for TerminalTab {
             ctx: self.ctx.clone(),
             input_buffer: String::new(),
             is_composing: false,
+            selection_start: None,
+            selection_end: None,
+            drag_start: None,
         }
     }
 }
@@ -581,112 +587,360 @@ impl TabInstance for TerminalTab {
             input_response.request_focus();
         }
 
+        // Handle Mouse Selection (using input_response which covers the area)
+        if input_response.hovered() {
+            if let Some(pos) = input_response.interact_pointer_pos() {
+                let rel_pos = pos - rect.min;
+                let col = (rel_pos.x / char_size.x).floor() as usize;
+                let row_rel = (rel_pos.y / char_size.y).floor() as usize;
+                
+                let state = self.state.lock();
+                let history_len = state.history.len();
+                let grid_len = state.grid().len();
+                let total_rows = history_len + grid_len;
+                let visible_start = total_rows.saturating_sub(rows + self.scroll_offset);
+                let row_idx = visible_start + row_rel;
+                drop(state);
+
+                if input_response.drag_started() {
+                    self.drag_start = Some((row_idx, col));
+                    self.selection_start = Some((row_idx, col));
+                    self.selection_end = Some((row_idx, col));
+                } else if input_response.dragged() {
+                    if let Some(_) = self.drag_start {
+                        self.selection_end = Some((row_idx, col));
+                    }
+                } else if input_response.clicked() {
+                    self.selection_start = None;
+                    self.selection_end = None;
+                    self.drag_start = None;
+                }
+            }
+        }
+
         if input_response.has_focus() {
             let mut writer = self.writer.lock();
             let state = self.state.lock();
             let is_app_mode = state.application_cursor;
             drop(state); // Unlock early
 
-            // 1. Check IME State & Gather Events
-            // We use a separate loop to scan events because we need to handle them in order 
-            // and we shouldn't rely on TextEdit's buffer for the actual input content 
-            // (it contains intermediate IME states).
+                        let mut text_to_copy = None;
+
             
-            ui.input(|i| {
-                for event in &i.events {
-                    match event {
-                        egui::Event::Ime(ime_event) => {
-                            match ime_event {
-                                egui::ImeEvent::Preedit(text) => {
-                                    self.is_composing = !text.is_empty();
-                                }
-                                egui::ImeEvent::Commit(text) => {
-                                    self.is_composing = false;
-                                    output_to_write.push_str(&text);
-                                }
-                                egui::ImeEvent::Disabled => {
-                                    self.is_composing = false;
-                                }
-                                _ => {}
-                            }
-                        }
-                        
-                        egui::Event::Text(text) => {
-                            // If text is a single control char that we handle via Keys, ignore it.
-                            // This avoids double input for Enter (\n) and Tab (\t).
-                            let is_handled_control = if text.len() == 1 {
-                                let c = text.chars().next().unwrap();
-                                c == '\n' || c == '\r' || c == '\t' || c == '\x08' || c == '\x7f'
-                            } else {
-                                false
-                            };
 
-                            if !is_handled_control {
-                                // For paste or normal text, we send it.
-                                // We convert newlines to \r to ensure correct terminal behavior.
-                                let fixed_text = text.replace("\n", "\r");
-                                output_to_write.push_str(&fixed_text);
-                            }
-                        }
+                        // 1. Check IME State & Gather Events
 
-                        egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                            // If we are composing, we generally want to ignore raw keys 
-                            // (like arrows moving candidate selection), BUT some IMEs 
-                            // might not consume all keys. 
-                            // However, the safe bet for a terminal is: if composing, 
-                            // ignore navigation keys to prevent terminal cursor jumping.
-                            
-                            if self.is_composing {
-                                // Exception: Maybe we shouldn't ignore ALL keys?
-                                // But for now, ignoring Special keys during composition is the fix for the "Arrow" bug.
-                                // Normal keys (A-Z) are not handled here anyway.
-                                continue;
-                            }
+                        // We use a separate loop to scan events because we need to handle them in order 
 
-                            let seq = match key {
-                                Key::Enter => Some("\r".to_string()),
-                                Key::Backspace => Some("\x7f".to_string()),
-                                Key::Tab => Some("\t".to_string()),
-                                Key::Escape => Some("\x1b".to_string()),
-                                Key::ArrowUp => Some(if is_app_mode { "\x1bOA" } else { "\x1b[A" }.to_string()),
-                                Key::ArrowDown => Some(if is_app_mode { "\x1bOB" } else { "\x1b[B" }.to_string()),
-                                Key::ArrowRight => Some(if is_app_mode { "\x1bOC" } else { "\x1b[C" }.to_string()),
-                                Key::ArrowLeft => Some(if is_app_mode { "\x1bOD" } else { "\x1b[D" }.to_string()),
-                                Key::Home => Some(if is_app_mode { "\x1bOH" } else { "\x1b[H" }.to_string()),
-                                Key::End => Some(if is_app_mode { "\x1bOF" } else { "\x1b[F" }.to_string()),
-                                Key::PageUp => Some("\x1b[5~".to_string()),
-                                Key::PageDown => Some("\x1b[6~".to_string()),
-                                Key::Insert => Some("\x1b[2~".to_string()),
-                                Key::Delete => Some("\x1b[3~".to_string()),
-                                
-                                _ if modifiers.ctrl => {
-                                    let k = format!("{:?}", key);
-                                    if k.len() == 1 {
-                                        let c = k.chars().next().unwrap();
-                                        if c >= 'A' && c <= 'Z' {
-                                            Some(((c as u8 - b'A' + 1) as char).to_string())
-                                        } else { None }
-                                    } else {
-                                        match key {
-                                            Key::C => Some("\x03".to_string()),
-                                            Key::D => Some("\x04".to_string()),
-                                            Key::L => Some("\x0c".to_string()),
-                                            Key::Z => Some("\x1a".to_string()),
-                                            _ => None
+                        // and we shouldn't rely on TextEdit's buffer for the actual input content 
+
+                        // (it contains intermediate IME states).
+
+                        ui.input(|i| {
+
+                            for event in &i.events {
+
+                                match event {
+
+                                    egui::Event::Ime(ime_event) => {
+
+                                        match ime_event {
+
+                                            egui::ImeEvent::Preedit(text) => {
+
+                                                self.is_composing = !text.is_empty();
+
+                                            }
+
+                                            egui::ImeEvent::Commit(text) => {
+
+                                                self.is_composing = false;
+
+                                                output_to_write.push_str(&text);
+
+                                            }
+
+                                            egui::ImeEvent::Disabled => {
+
+                                                self.is_composing = false;
+
+                                            }
+
+                                            _ => {}
+
                                         }
-                                    }
-                                }
-                                _ => None,
-                            };
 
-                            if let Some(s) = seq {
-                                output_to_write.push_str(&s);
+                                    }
+
+                                    
+
+                                    egui::Event::Text(text) => {
+
+                                        // If text is a single control char that we handle via Keys, ignore it.
+
+                                        // This avoids double input for Enter (\n) and Tab (\t).
+
+                                        let is_handled_control = if text.len() == 1 {
+
+                                            let c = text.chars().next().unwrap();
+
+                                            c == '\n' || c == '\r' || c == '\t' || c == '\x08' || c == '\x7f'
+
+                                        } else {
+
+                                            false
+
+                                        };
+
+            
+
+                                        if !is_handled_control {
+
+                                            // For paste or normal text, we send it.
+
+                                            // We convert newlines to \r to ensure correct terminal behavior.
+
+                                            let fixed_text = text.replace("\n", "\r");
+
+                                            output_to_write.push_str(&fixed_text);
+
+                                        }
+
+                                    }
+
+            
+
+                                    egui::Event::Paste(text) => {
+
+                                        if !self.is_composing {
+
+                                            let fixed_text = text.replace("\n", "\r");
+
+                                            output_to_write.push_str(&fixed_text);
+
+                                        }
+
+                                    }
+
+            
+
+                                    egui::Event::Copy => {
+
+                                        if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+
+                                            let (s, e) = if start <= end { (start, end) } else { (end, start) };
+
+                                            let state = self.state.lock();
+
+                                            let mut text = String::new();
+
+                                            
+
+                                            let history_len = state.history.len();
+
+                                            let total_rows = history_len + state.grid().len();
+
+                                            
+
+                                            for r in s.0..=e.0 {
+
+                                                if r >= total_rows { break; }
+
+                                                let cells = if r < history_len { &state.history[r] } else { &state.grid()[r - history_len] };
+
+                                                
+
+                                                let c_start = if r == s.0 { s.1 } else { 0 };
+
+                                                let c_end = if r == e.0 { (e.1 + 1).min(cells.len()) } else { cells.len() };
+
+                                                
+
+                                                                                    for c in c_start..c_end {
+
+                                                
+
+                                                                                        if c < cells.len() {
+
+                                                
+
+                                                                                            let cell = &cells[c];
+
+                                                
+
+                                                                                            if !cell.is_wide_continuation {
+
+                                                
+
+                                                                                                text.push(cell.c);
+
+                                                
+
+                                                                                            }
+
+                                                
+
+                                                                                        } else {
+
+                                                
+
+                                                                                            text.push(' ');
+
+                                                
+
+                                                                                        }
+
+                                                
+
+                                                                                    }
+
+                                                if r != e.0 { text.push('\n'); }
+
+                                            }
+
+                                            text_to_copy = Some(text);
+
+                                        }
+
+                                    }
+
+            
+
+                                    egui::Event::Key { key, pressed: true, modifiers, .. } => {
+
+                                        if self.is_composing {
+
+                                            continue;
+
+                                        }
+
+            
+
+                                        // Handle Copy (Ctrl+C) manual check
+
+                                        // We keep this as fallback, but if Event::Copy works, this might be redundant
+
+                                        // OR we use it to BLOCK sending \x03 if selection exists.
+
+                                        if *key == Key::C && modifiers.ctrl {
+
+                                            let has_selection = self.selection_start.is_some() && self.selection_end.is_some();
+
+                                            if has_selection {
+
+                                                // Assuming Event::Copy handles the actual copy
+
+                                                // We just want to prevent sending SIGINT
+
+                                                continue; 
+
+                                            }
+
+                                        }
+
+            
+
+                                        let seq = match key {
+
+                                            Key::Enter => Some("\r".to_string()),
+
+                                            Key::Backspace => Some("\x7f".to_string()),
+
+                                            Key::Tab => Some("\t".to_string()),
+
+                                            Key::Escape => Some("\x1b".to_string()),
+
+                                            Key::ArrowUp => Some(if is_app_mode { "\x1bOA" } else { "\x1b[A" }.to_string()),
+
+                                            Key::ArrowDown => Some(if is_app_mode { "\x1bOB" } else { "\x1b[B" }.to_string()),
+
+                                            Key::ArrowRight => Some(if is_app_mode { "\x1bOC" } else { "\x1b[C" }.to_string()),
+
+                                            Key::ArrowLeft => Some(if is_app_mode { "\x1bOD" } else { "\x1b[D" }.to_string()),
+
+                                            Key::Home => Some(if is_app_mode { "\x1bOH" } else { "\x1b[H" }.to_string()),
+
+                                            Key::End => Some(if is_app_mode { "\x1bOF" } else { "\x1b[F" }.to_string()),
+
+                                            Key::PageUp => Some("\x1b[5~".to_string()),
+
+                                            Key::PageDown => Some("\x1b[6~".to_string()),
+
+                                            Key::Insert => Some("\x1b[2~".to_string()),
+
+                                            Key::Delete => Some("\x1b[3~".to_string()),
+
+                                            
+
+                                            _ if modifiers.ctrl => {
+
+                                                let k = format!("{:?}", key);
+
+                                                if k.len() == 1 {
+
+                                                    let c = k.chars().next().unwrap();
+
+                                                    if c >= 'A' && c <= 'Z' {
+
+                                                        // Handle Ctrl+V separately via Event::Paste
+
+                                                        if c == 'V' { None }
+
+                                                        else { Some(((c as u8 - b'A' + 1) as char).to_string()) }
+
+                                                    } else { None }
+
+                                                } else {
+
+                                                    match key {
+
+                                                        Key::C => Some("\x03".to_string()),
+
+                                                        Key::D => Some("\x04".to_string()),
+
+                                                        Key::L => Some("\x0c".to_string()),
+
+                                                        Key::Z => Some("\x1a".to_string()),
+
+                                                        _ => None
+
+                                                    }
+
+                                                }
+
+                                            }
+
+                                            _ => None,
+
+                                        };
+
+            
+
+                                        if let Some(s) = seq {
+
+                                            output_to_write.push_str(&s);
+
+                                        }
+
+                                    }
+
+                                    _ => {}
+
+                                }
+
                             }
+
+                        });
+
+            
+
+                        // Set clipboard outside of ui.input closure to avoid potential deadlocks/conflicts
+
+                        if let Some(text) = text_to_copy {
+
+                            ui.output_mut(|o| o.copied_text = text);
+
                         }
-                        _ => {}
-                    }
-                }
-            });
 
             // Clean the dummy buffer only when not composing to prevent infinite growth
             // but preserve it during composition so egui can do its preview thing.
@@ -700,7 +954,8 @@ impl TabInstance for TerminalTab {
         }
 
         // Scrolling
-        if response.hovered() {
+        // We check `input_response.hovered()` because the TextEdit is covering the rect.
+        if input_response.hovered() {
             let delta = ui.input(|i| i.smooth_scroll_delta.y);
             if delta != 0.0 {
                 let lines = (delta / char_size.y).round() as isize;
@@ -738,7 +993,32 @@ impl TabInstance for TerminalTab {
 
             let row_pos = rect.min + Vec2::new(0.0, r as f32 * char_size.y);
             
-            // 1. 第一阶段：绘制背景（合并相同颜色的色块以提高性能并减少缝隙）
+            // 0. Selection Background
+            // Prepare selection highlight range
+            let mut selection_range = None;
+            if let (Some(s), Some(e)) = (self.selection_start, self.selection_end) {
+                let (start, end) = if s <= e { (s, e) } else { (e, s) };
+                selection_range = Some((start, end));
+            }
+
+            if let Some((s, e)) = selection_range {
+                // Check if this row is involved in selection
+                if row_idx >= s.0 && row_idx <= e.0 {
+                    let c_start = if row_idx == s.0 { s.1 } else { 0 };
+                    // Selection end is inclusive index, so render up to e.1 + 1
+                    let c_end = if row_idx == e.0 { (e.1 + 1).min(cols) } else { cols };
+                    
+                    if c_start < c_end {
+                        let sel_rect = Rect::from_min_size(
+                            row_pos + Vec2::new(c_start as f32 * char_size.x, 0.0),
+                            Vec2::new((c_end - c_start) as f32 * char_size.x, char_size.y)
+                        );
+                        painter.rect_filled(sel_rect, 0.0, Color32::from_rgba_premultiplied(100, 100, 150, 100));
+                    }
+                }
+            }
+
+            // 1. First Phase: Background
             let mut c_idx = 0;
             while c_idx < cells.len().min(cols) {
                 let cell = &cells[c_idx];
@@ -869,6 +1149,9 @@ fn create_terminal_tab(ctx: egui::Context) -> anyhow::Result<TerminalTab> {
         ctx,
         input_buffer: String::new(),
         is_composing: false,
+        selection_start: None,
+        selection_end: None,
+        drag_start: None,
     })
 }
 
