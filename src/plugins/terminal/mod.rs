@@ -192,8 +192,11 @@ struct LogHandler<'a> {
 
 impl<'a> Perform for LogHandler<'a> {
     fn print(&mut self, c: char) {
+        let is_wide = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) > 1;
+        let width = if is_wide { 2 } else { 1 };
+        
         let cols = self.state.cols;
-        if self.state.cursor_col >= cols {
+        if self.state.cursor_col + width > cols {
             self.state.cursor_col = 0;
             self.state.cursor_row += 1;
         }
@@ -204,8 +207,8 @@ impl<'a> Perform for LogHandler<'a> {
 
         let r = self.state.cursor_row;
         let c_idx = self.state.cursor_col;
-        if r < self.state.rows && c_idx < cols {
-            let cell = Cell {
+        if r < self.state.rows {
+            let cell_style = Cell {
                 c,
                 fg: self.state.current_fg,
                 bg: self.state.current_bg,
@@ -215,8 +218,17 @@ impl<'a> Perform for LogHandler<'a> {
                 inverse: self.state.current_inverse,
                 is_wide_continuation: false,
             };
-            self.state.grid_mut()[r][c_idx] = cell;
-            self.state.cursor_col += 1;
+
+            let grid = self.state.grid_mut();
+            grid[r][c_idx] = cell_style;
+
+            if is_wide && c_idx + 1 < cols {
+                let mut continuation = cell_style;
+                continuation.c = ' ';
+                continuation.is_wide_continuation = true;
+                grid[r][c_idx + 1] = continuation;
+            }
+            self.state.cursor_col += width;
             self.state.dirty = true;
         }
     }
@@ -417,10 +429,11 @@ impl<'a> Perform for LogHandler<'a> {
 
 pub struct TerminalTab {
     state: Arc<Mutex<TerminalState>>,
-    writer: Arc<Mutex<Box<dyn Write + Send>> >,
-    master: Arc<Mutex<Box<dyn MasterPty + Send>> >,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     last_size: (usize, usize),
     scroll_offset: usize,
+    ctx: egui::Context,
 }
 
 impl std::fmt::Debug for TerminalTab {
@@ -437,6 +450,7 @@ impl Clone for TerminalTab {
             master: self.master.clone(),
             last_size: self.last_size,
             scroll_offset: self.scroll_offset,
+            ctx: self.ctx.clone(),
         }
     }
 }
@@ -472,11 +486,16 @@ impl TabInstance for TerminalTab {
             self.last_size = (cols, rows);
         }
 
-        // Input
+        // Input & IME Position
         if response.has_focus() {
             let mut writer = self.writer.lock();
             let mut state = self.state.lock();
             let is_app_mode = state.application_cursor;
+
+            // Update IME position
+            let cursor_pos = rect.min + Vec2::new(state.cursor_col as f32 * char_size.x, state.cursor_row as f32 * char_size.y);
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::IMEAllowed(true));
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::IMERect(Rect::from_min_size(cursor_pos, char_size)));
 
             ui.input(|i| {
                 for event in &i.events {
@@ -517,7 +536,7 @@ impl TabInstance for TerminalTab {
                                 let _ = writer.write_all(s.as_bytes());
                             }
                         }
-                        _ => {} // Ignore other input events
+                        _ => {}
                     }
                 }
             });
@@ -561,74 +580,68 @@ impl TabInstance for TerminalTab {
                 &grid[row_idx - history.len()]
             };
 
-            let row_rect = Rect::from_min_size(
-                rect.min + Vec2::new(0.0, r as f32 * char_size.y),
-                Vec2::new(rect.width(), char_size.y)
-            );
-
-            let mut x_offset = 0.0;
-            let mut i = 0;
-            while i < cells.len().min(cols) {
-                let start_idx = i;
-                let cell = &cells[i];
-                let mut text = String::new();
-                text.push(cell.c);
-                i += 1;
-                
-                // Group cells with same style
-                while i < cells.len().min(cols) && 
-                      cells[i].fg == cell.fg && 
-                      cells[i].bg == cell.bg && 
-                      cells[i].bold == cell.bold &&
-                      cells[i].italic == cell.italic &&
-                      cells[i].underline == cell.underline &&
-                      cells[i].inverse == cell.inverse {
-                    text.push(cells[i].c);
-                    i += 1;
-                }
-
-                let (mut fg, mut bg) = (cell.fg, cell.bg);
+            let row_pos = rect.min + Vec2::new(0.0, r as f32 * char_size.y);
+            
+            // 1. 第一阶段：绘制背景（合并相同颜色的色块以提高性能并减少缝隙）
+            let mut c_idx = 0;
+            while c_idx < cells.len().min(cols) {
+                let cell = &cells[c_idx];
+                let mut bg = cell.bg;
                 if cell.inverse {
-                    std::mem::swap(&mut fg, &mut bg);
-                    if fg == Color32::TRANSPARENT { fg = TERM_BG; }
-                    if bg == Color32::TRANSPARENT { bg = TERM_FG; }
+                    bg = if cell.fg == Color32::TRANSPARENT { TERM_FG } else { cell.fg };
                 }
-
-                let text_pos = row_rect.min + Vec2::new(x_offset, 0.0);
-                let segment_width = (i - start_idx) as f32 * char_size.x;
                 
-                if bg != Color32::TRANSPARENT {
-                    painter.rect_filled(
-                        Rect::from_min_size(text_pos, Vec2::new(segment_width, char_size.y)),
-                        0.0,
-                        bg
+                let start_x = c_idx;
+                c_idx += 1;
+                while c_idx < cells.len().min(cols) {
+                    let next = &cells[c_idx];
+                    let mut next_bg = next.bg;
+                    if next.inverse {
+                        next_bg = if next.fg == Color32::TRANSPARENT { TERM_FG } else { next.fg };
+                    }
+                    if next_bg != bg { break; }
+                    c_idx += 1;
+                }
+                
+                if bg != Color32::TRANSPARENT && bg != TERM_BG {
+                    let bg_rect = Rect::from_min_size(
+                        row_pos + Vec2::new(start_x as f32 * char_size.x, 0.0),
+                        Vec2::new((c_idx - start_x) as f32 * char_size.x, char_size.y)
                     );
+                    painter.rect_filled(bg_rect, 0.0, bg);
                 }
-
-                let mut job = LayoutJob::default();
-                let format = TextFormat {
-                    font_id: font_id.clone(),
-                    color: fg,
-                    ..Default::default()
-                };
-                if cell.bold { /* bold is usually handled by font but egui doesn't have easy bold monospace fallback usually */ }
-                if cell.italic { /* same for italic */ }
-                if cell.underline { /* can be added to format */ }
-                
-                job.append(&text, 0.0, format);
-                painter.galley(text_pos, ui.fonts(|f| f.layout_job(job)), Color32::TRANSPARENT);
-                
-                x_offset += segment_width;
             }
 
-            // Draw cursor
-            if state.cursor_visible && !state.is_alt_screen && (row_idx == history.len() + state.cursor_row) {
-                let cursor_pos = row_rect.min + Vec2::new(state.cursor_col as f32 * char_size.x, 0.0);
+            // 2. 第二阶段：绘制文字
+            for (c_idx, cell) in cells.iter().enumerate().take(cols) {
+                if cell.is_wide_continuation || cell.c == ' ' { continue; }
+                
+                let mut fg = cell.fg;
+                if cell.inverse {
+                    fg = if cell.bg == Color32::TRANSPARENT { TERM_BG } else { cell.bg };
+                }
+                if fg == Color32::TRANSPARENT { fg = TERM_FG; }
+                
+                let cell_pos = row_pos + Vec2::new(c_idx as f32 * char_size.x, 0.0);
+                let mut job = LayoutJob::default();
+                job.append(
+                    &cell.c.to_string(),
+                    0.0,
+                    TextFormat {
+                        font_id: font_id.clone(),
+                        color: fg,
+                        ..Default::default()
+                    }
+                );
+                painter.galley(cell_pos, ui.fonts(|f| f.layout_job(job)), Color32::TRANSPARENT);
+            }
+
+            // 3. 第三阶段：绘制光标
+            if state.cursor_visible && (row_idx == (history.len() + state.cursor_row)) {
+                let cursor_pos = row_pos + Vec2::new(state.cursor_col as f32 * char_size.x, 0.0);
                 painter.rect_filled(Rect::from_min_size(cursor_pos, char_size), 0.0, Color32::from_gray(200).linear_multiply(0.5));
             }
         }
-
-        ui.ctx().request_repaint();
     }
 
     fn box_clone(&self) -> Box<dyn TabInstance> {
@@ -643,7 +656,7 @@ impl Plugin for TerminalPlugin {
 
     fn on_tab_menu(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
         if ui.button("New Terminal").clicked() {
-            if let Ok(tab) = create_terminal_tab() {
+            if let Ok(tab) = create_terminal_tab(ui.ctx().clone()) {
                 control.push(AppCommand::OpenTab(Tab::new(Box::new(tab))));
             }
             ui.close_menu();
@@ -651,7 +664,7 @@ impl Plugin for TerminalPlugin {
     }
 }
 
-fn create_terminal_tab() -> anyhow::Result<TerminalTab> {
+fn create_terminal_tab(ctx: egui::Context) -> anyhow::Result<TerminalTab> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
         rows: 24,
@@ -672,17 +685,21 @@ fn create_terminal_tab() -> anyhow::Result<TerminalTab> {
     
     let state = Arc::new(Mutex::new(TerminalState::new(24, 80)));
     let s_thread = state.clone();
+    let ctx_thread = ctx.clone();
 
     std::thread::spawn(move || {
         let mut buffer = [0u8; 8192];
         let mut parser = Parser::new();
         while let Ok(n) = reader.read(&mut buffer) {
             if n == 0 { break; }
-            let mut s = s_thread.lock();
-            let mut handler = LogHandler { state: &mut *s };
-            for byte in &buffer[..n] {
-                parser.advance(&mut handler, *byte);
+            {
+                let mut s = s_thread.lock();
+                let mut handler = LogHandler { state: &mut *s };
+                for byte in &buffer[..n] {
+                    parser.advance(&mut handler, *byte);
+                }
             }
+            ctx_thread.request_repaint();
         }
     });
 
@@ -692,8 +709,10 @@ fn create_terminal_tab() -> anyhow::Result<TerminalTab> {
         master: Arc::new(Mutex::new(pair.master)),
         last_size: (80, 24),
         scroll_offset: 0,
+        ctx,
     })
 }
+
 
 pub fn create() -> TerminalPlugin {
     TerminalPlugin
