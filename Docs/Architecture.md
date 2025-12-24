@@ -52,27 +52,20 @@ pub enum AppCommand {
     CloseTab(String),        // 根据标题关闭 Tab
     TileAll,                 // 平铺布局
     ResetLayout,             // 重置布局
-    OpenFile(PathBuf),       // [v0.2] 请求打开文件
-    ToggleSettings,          // [v0.2] 打开设置面板
+    OpenFile(PathBuf),       // 请求打开文件
+    RevealInShell(PathBuf),  // 在系统文件管理器中定位
+    CopyToClipboard(String), // 写入剪贴板
+    Notify { message: String, level: NotificationLevel }, // 全局通知
+    ToggleSettings,          // 打开设置面板
 }
 ```
 
-### 3.2 文件打开流程 (Mediator Pattern)
-为了让“文件管理器”不依赖“代码编辑器”，我们设计了如下流程：
+### 3.2 异步 I/O 与反馈模式
+为保证 UI 流畅，插件处理耗时操作（如读取大文件）应遵循以下规范：
+1. **异步执行**：通过 `std::thread::spawn` 或异步 Runtime 执行 I/O。
+2. **状态流转**：UI 层面应实现 `Loading` 占位状态并显示 Spinner。
+3. **全局通知**：操作结果（保存成功、删除失败等）必须通过 `AppCommand::Notify` 进行反馈。
 
-1.  **发起**：插件 A (File Manager) 发送 `AppCommand::OpenFile(path)`.
-2.  **中介**：主程序捕获该命令。
-3.  **询问**：主程序遍历插件列表，依次调用 `plugin.try_open_file(path)`.
-4.  **响应**：插件 B (Code Editor) 检查文件扩展名。如果支持，返回 `Some(TabInstance)`.
-5.  **执行**：主程序接收到 Tab 实例，将其添加到 UI 布局中。
-
-### 3.3 设置系统
-统一的设置界面由主程序托管。
-- 插件实现 `on_settings_ui(&mut self, ui: &mut Ui)`.
-- 用户点击 "Settings" 时，主程序弹出模态窗口，并遍历调用所有插件的 `on_settings_ui`，将它们的配置界面聚合在一个滚动列表中。
-
-## 4. 目录结构规范
-
-- **项目根目录**：包含 `Cargo.toml` (由 Launcher 托管) 和 `PLUGIN_REQUIREMENTS.md`.
-- **src/plugins/**：插件源码仓库。每个插件必须包含 `mod.rs` 和可选的 `plugin.toml`.
-- **Docs/**：项目文档。
+## 4. 插件规范
+- **元数据绑定**：插件 `name()` 必须引用 `generated.rs` 中自动生成的常量，禁止硬编码。
+- **系统隔离**：严禁在插件内直接调用平台特定代码（如 `explorer`），必须通过 `AppCommand` 委托宿主执行。

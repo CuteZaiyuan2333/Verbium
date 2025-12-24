@@ -34,3 +34,6 @@ plugin_file_manager = []
 plugin_terminal = []
 plugin_test_plugin = []
 # --- END PLUGIN FEATURES ---
+
+[build-dependencies]
+toml = "0.8"

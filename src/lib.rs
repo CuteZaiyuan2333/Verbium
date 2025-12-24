@@ -69,8 +69,22 @@ pub enum AppCommand {
     CloseTab(String),
     /// 请求打开指定路径的文件
     OpenFile(std::path::PathBuf),
+    /// 在系统文件管理器中定位
+    RevealInShell(std::path::PathBuf),
+    /// 将字符串拷贝到系统剪贴板
+    CopyToClipboard(String),
+    /// 发送全局通知
+    Notify { message: String, level: NotificationLevel },
     /// 切换设置窗口
     ToggleSettings,
+}
+
+#[derive(Debug, Clone)]
+pub enum NotificationLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
 }
 
 // ----------------------------------------------------------------------------

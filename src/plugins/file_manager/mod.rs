@@ -79,17 +79,29 @@ impl FileExplorerTab {
                     ui.close_menu();
                 }
                 if ui.button("Reveal in Explorer").clicked() {
-                    reveal_in_explorer(&path);
+                    control.push(AppCommand::RevealInShell(path.clone()));
                     ui.close_menu();
                 }
                 if ui.button("Copy Path").clicked() {
-                    ui.output_mut(|o| o.copied_text = path.to_string_lossy().to_string());
+                    control.push(AppCommand::CopyToClipboard(path.to_string_lossy().to_string()));
                     ui.close_menu();
                 }
                 ui.separator();
                 if ui.button("Delete").clicked() {
-                    if let Ok(_) = std::fs::remove_dir_all(&path) {
-                        self.expanded_nodes.remove(&path);
+                    match std::fs::remove_dir_all(&path) {
+                        Ok(_) => {
+                            self.expanded_nodes.remove(&path);
+                            control.push(AppCommand::Notify { 
+                                message: format!("Deleted folder: {}", name), 
+                                level: crate::NotificationLevel::Success 
+                            });
+                        }
+                        Err(e) => {
+                            control.push(AppCommand::Notify { 
+                                message: format!("Failed to delete folder: {}", e), 
+                                level: crate::NotificationLevel::Error 
+                            });
+                        }
                     }
                     ui.close_menu();
                 }
@@ -123,38 +135,33 @@ impl FileExplorerTab {
                         ui.close_menu();
                     }
                     if ui.button("Reveal in Explorer").clicked() {
-                        reveal_in_explorer(&path);
+                        control.push(AppCommand::RevealInShell(path.clone()));
                         ui.close_menu();
                     }
                     if ui.button("Copy Path").clicked() {
-                        ui.output_mut(|o| o.copied_text = path.to_string_lossy().to_string());
+                        control.push(AppCommand::CopyToClipboard(path.to_string_lossy().to_string()));
                         ui.close_menu();
                     }
                     ui.separator();
                     if ui.button("Delete").clicked() {
-                        let _ = std::fs::remove_file(&path);
+                        match std::fs::remove_file(&path) {
+                            Ok(_) => {
+                                control.push(AppCommand::Notify { 
+                                    message: format!("Deleted file: {}", name), 
+                                    level: crate::NotificationLevel::Success 
+                                });
+                            }
+                            Err(e) => {
+                                control.push(AppCommand::Notify { 
+                                    message: format!("Failed to delete file: {}", e), 
+                                    level: crate::NotificationLevel::Error 
+                                });
+                            }
+                        }
                         ui.close_menu();
                     }
                 });
             });
-        }
-    }
-}
-
-fn reveal_in_explorer(path: &std::path::Path) {
-    #[cfg(target_os = "windows")]
-    {
-        use std::process::Command;
-        let path_str = path.to_string_lossy().to_string();
-        if path.is_file() {
-            let _ = Command::new("explorer")
-                .arg("/select,")
-                .arg(path_str)
-                .spawn();
-        } else {
-            let _ = Command::new("explorer")
-                .arg(path_str)
-                .spawn();
         }
     }
 }
@@ -215,8 +222,20 @@ impl TabInstance for FileExplorerTab {
                     ui.horizontal(|ui| {
                         if ui.button("Rename").clicked() {
                             let new_path = path.parent().unwrap().join(&self.input_text);
-                            if let Ok(_) = std::fs::rename(&path, new_path) {
-                                self.rename_path = None;
+                            match std::fs::rename(&path, new_path) {
+                                Ok(_) => {
+                                    self.rename_path = None;
+                                    control.push(AppCommand::Notify { 
+                                        message: "Renamed successfully".into(), 
+                                        level: crate::NotificationLevel::Success 
+                                    });
+                                }
+                                Err(e) => {
+                                    control.push(AppCommand::Notify { 
+                                        message: format!("Rename failed: {}", e), 
+                                        level: crate::NotificationLevel::Error 
+                                    });
+                                }
                             }
                         }
                         if ui.button("Cancel").clicked() {
@@ -240,14 +259,27 @@ impl TabInstance for FileExplorerTab {
                     ui.horizontal(|ui| {
                         if ui.button("Create").clicked() {
                             let new_path = parent.join(&self.input_text);
-                            let success = if is_dir {
-                                std::fs::create_dir_all(&new_path).is_ok()
+                            let res = if is_dir {
+                                std::fs::create_dir_all(&new_path)
                             } else {
-                                std::fs::File::create(&new_path).is_ok()
+                                std::fs::File::create(&new_path).map(|_| ())
                             };
-                            if success {
-                                self.new_item_parent = None;
-                                self.expanded_nodes.insert(parent);
+
+                            match res {
+                                Ok(_) => {
+                                    self.new_item_parent = None;
+                                    self.expanded_nodes.insert(parent);
+                                    control.push(AppCommand::Notify { 
+                                        message: format!("Created {}", if is_dir { "folder" } else { "file" }), 
+                                        level: crate::NotificationLevel::Success 
+                                    });
+                                }
+                                Err(e) => {
+                                    control.push(AppCommand::Notify { 
+                                        message: format!("Creation failed: {}", e), 
+                                        level: crate::NotificationLevel::Error 
+                                    });
+                                }
                             }
                         }
                         if ui.button("Cancel").clicked() {
@@ -272,7 +304,7 @@ pub struct FileManagerPlugin;
 
 impl Plugin for FileManagerPlugin {
     fn name(&self) -> &str {
-        "file_manager"
+        crate::plugins::PLUGIN_NAME_FILE_MANAGER
     }
 
     fn on_tab_menu(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {

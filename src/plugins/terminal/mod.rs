@@ -1089,7 +1089,7 @@ impl TabInstance for TerminalTab {
 pub struct TerminalPlugin;
 
 impl Plugin for TerminalPlugin {
-    fn name(&self) -> &str { "terminal" }
+    fn name(&self) -> &str { crate::plugins::PLUGIN_NAME_TERMINAL }
 
     fn on_tab_menu(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
         if ui.button("New Terminal").clicked() {

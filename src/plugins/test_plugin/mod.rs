@@ -18,7 +18,7 @@ impl TabInstance for TestTab {
 pub struct TestPlugin;
 
 impl Plugin for TestPlugin {
-    fn name(&self) -> &str { "test_plugin" }
+    fn name(&self) -> &str { crate::plugins::PLUGIN_NAME_TEST_PLUGIN }
 
     fn dependencies(&self) -> Vec<String> {
         vec!["core".to_string()]

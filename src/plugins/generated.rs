@@ -13,15 +13,41 @@ pub mod terminal;
 pub mod test_plugin;
 
 
+// Plugin Name Constants
+#[cfg(feature = "plugin_code_editor")]
+pub const PLUGIN_NAME_CODE_EDITOR: &str = "code_editor";
+#[cfg(feature = "plugin_file_manager")]
+pub const PLUGIN_NAME_FILE_MANAGER: &str = "file_manager";
+#[cfg(feature = "plugin_terminal")]
+pub const PLUGIN_NAME_TERMINAL: &str = "terminal";
+#[cfg(feature = "plugin_test_plugin")]
+pub const PLUGIN_NAME_TEST_PLUGIN: &str = "test_plugin";
+
 pub fn get_extra_plugins() -> Vec<Box<dyn crate::Plugin>> {
-    vec![
+    let mut plugins: Vec<Box<dyn crate::Plugin>> = Vec::new();
         #[cfg(feature = "plugin_code_editor")]
-        Box::new(code_editor::create()),
+        {
+            let p = Box::new(code_editor::create());
+            assert_eq!(p.name(), PLUGIN_NAME_CODE_EDITOR, "Plugin name mismatch for code_editor");
+            plugins.push(p);
+        }
         #[cfg(feature = "plugin_file_manager")]
-        Box::new(file_manager::create()),
+        {
+            let p = Box::new(file_manager::create());
+            assert_eq!(p.name(), PLUGIN_NAME_FILE_MANAGER, "Plugin name mismatch for file_manager");
+            plugins.push(p);
+        }
         #[cfg(feature = "plugin_terminal")]
-        Box::new(terminal::create()),
+        {
+            let p = Box::new(terminal::create());
+            assert_eq!(p.name(), PLUGIN_NAME_TERMINAL, "Plugin name mismatch for terminal");
+            plugins.push(p);
+        }
         #[cfg(feature = "plugin_test_plugin")]
-        Box::new(test_plugin::create()),
-    ]
+        {
+            let p = Box::new(test_plugin::create());
+            assert_eq!(p.name(), PLUGIN_NAME_TEST_PLUGIN, "Plugin name mismatch for test_plugin");
+            plugins.push(p);
+        }
+    plugins
 }

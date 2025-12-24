@@ -1,7 +1,16 @@
 use eframe::egui;
 use egui_dock::{DockArea, DockState, Style, TabViewer};
-use crate::{Tab, Plugin, AppCommand};
+use crate::{Tab, Plugin, AppCommand, NotificationLevel};
 use crate::plugins;
+
+// ----------------------------------------------------------------------------
+// Notification System
+// ----------------------------------------------------------------------------
+struct NotificationInstance {
+    message: String,
+    level: NotificationLevel,
+    remaining_time: f32,
+}
 
 // ----------------------------------------------------------------------------
 // TabViewer 实现
@@ -101,6 +110,7 @@ pub struct VerbiumApp {
     dock_state: DockState<Tab>,
     plugins: Vec<Box<dyn Plugin>>,
     command_queue: Vec<AppCommand>,
+    notifications: Vec<NotificationInstance>,
     show_settings: bool,
 }
 
@@ -115,12 +125,13 @@ impl VerbiumApp {
             dock_state,
             plugins,
             command_queue: Vec::new(),
+            notifications: Vec::new(),
             show_settings: false,
         };
         app
     }
 
-    fn process_commands(&mut self) {
+    fn process_commands(&mut self, ctx: &egui::Context) {
         // 使用 while 循环处理，防止指令执行中产生新指令被遗漏
         let mut i = 0;
         while i < self.command_queue.len() {
@@ -155,6 +166,42 @@ impl VerbiumApp {
                         }
                     }
                 }
+                AppCommand::RevealInShell(path) => {
+                    #[cfg(target_os = "windows")]
+                    {
+                        use std::process::Command;
+                        if path.is_file() {
+                            let _ = Command::new("explorer").arg("/select,").arg(path).spawn();
+                        } else {
+                            let _ = Command::new("explorer").arg(path).spawn();
+                        }
+                    }
+                    #[cfg(target_os = "macos")]
+                    {
+                        use std::process::Command;
+                        let _ = Command::new("open").arg("-R").arg(path).spawn();
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        use std::process::Command;
+                        let parent = if path.is_file() {
+                            path.parent().unwrap_or(path)
+                        } else {
+                            path
+                        };
+                        let _ = Command::new("xdg-open").arg(parent).spawn();
+                    }
+                }
+                AppCommand::CopyToClipboard(text) => {
+                    ctx.copy_text(text.clone());
+                }
+                AppCommand::Notify { message, level } => {
+                    self.notifications.push(NotificationInstance {
+                        message: message.clone(),
+                        level: level.clone(),
+                        remaining_time: 4.0,
+                    });
+                }
                 AppCommand::ToggleSettings => {
                     self.show_settings = !self.show_settings;
                 }
@@ -167,6 +214,13 @@ impl VerbiumApp {
 
 impl eframe::App for VerbiumApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 0. 更新通知时间
+        let dt = ctx.input(|i| i.stable_dt);
+        self.notifications.retain_mut(|n| {
+            n.remaining_time -= dt;
+            n.remaining_time > 0.0
+        });
+
         // 1. 插件逻辑更新
         for plugin in &mut self.plugins {
             plugin.update(&mut self.command_queue);
@@ -220,7 +274,7 @@ impl eframe::App for VerbiumApp {
         }
 
         // 4. 处理指令
-        self.process_commands();
+        self.process_commands(ctx);
 
         // 5. 中心 Dock 区域
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -236,5 +290,46 @@ impl eframe::App for VerbiumApp {
                 .show_close_buttons(true)
                 .show_inside(ui, &mut viewer);
         });
+
+        // 6. 渲染通知 (Toast)
+        let mut offset = egui::vec2(-10.0, -10.0);
+
+        for (i, n) in self.notifications.iter().enumerate() {
+            let color = match n.level {
+                NotificationLevel::Info => egui::Color32::from_rgb(100, 150, 255),
+                NotificationLevel::Success => egui::Color32::from_rgb(100, 200, 100),
+                NotificationLevel::Warning => egui::Color32::from_rgb(255, 200, 100),
+                NotificationLevel::Error => egui::Color32::from_rgb(255, 100, 100),
+            };
+
+            // 计算位置：右下角堆叠
+            let area_id = egui::Id::new("notification").with(i);
+            egui::Area::new(area_id)
+                .anchor(egui::Align2::RIGHT_BOTTOM, offset)
+                .show(ctx, |ui| {
+                    egui::Frame::window(ui.style())
+                        .fill(egui::Color32::from_rgba_premultiplied(30, 30, 30, 230))
+                        .stroke(egui::Stroke::new(1.0, color))
+                        .rounding(4.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let icon = match n.level {
+                                    NotificationLevel::Info => "ℹ",
+                                    NotificationLevel::Success => "✅",
+                                    NotificationLevel::Warning => "⚠",
+                                    NotificationLevel::Error => "❌",
+                                };
+                                ui.label(egui::RichText::new(icon).color(color).strong());
+                                ui.label(&n.message);
+                            });
+                        });
+                });
+            
+            offset.y -= 45.0; // 向上堆叠
+        }
+
+        if !self.notifications.is_empty() {
+            ctx.request_repaint();
+        }
     }
 }

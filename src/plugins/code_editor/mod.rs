@@ -1,5 +1,14 @@
 use egui::{Ui, WidgetText};
 use crate::{Tab, Plugin, AppCommand, TabInstance};
+use std::sync::Arc;
+use parking_lot::RwLock;
+
+#[derive(Debug, Clone)]
+enum EditorState {
+    Loading(Arc<RwLock<Option<Result<String, String>>>>),
+    Ready,
+    Error(String),
+}
 
 #[derive(Debug, Clone)]
 pub struct CodeEditorTab {
@@ -10,6 +19,7 @@ pub struct CodeEditorTab {
     pub is_dirty: bool,
     pub sync_mode: bool,
     pub last_sync_time: f64,
+    state: EditorState,
 }
 
 impl CodeEditorTab {
@@ -22,44 +32,74 @@ impl CodeEditorTab {
             is_dirty: false,
             sync_mode: false,
             last_sync_time: 0.0,
+            state: EditorState::Ready,
         }
     }
 
-    fn save(&mut self) {
-        if let Some(path) = &self.path {
-            if std::fs::write(path, &self.code).is_ok() {
-                self.is_dirty = false;
+    fn save(&mut self, control: &mut Vec<AppCommand>) {
+        if let EditorState::Ready = self.state {
+            if let Some(path) = &self.path {
+                match std::fs::write(path, &self.code) {
+                    Ok(_) => {
+                        self.is_dirty = false;
+                        control.push(AppCommand::Notify {
+                            message: format!("Saved {}", self.name),
+                            level: crate::NotificationLevel::Success,
+                        });
+                    }
+                    Err(e) => {
+                        control.push(AppCommand::Notify {
+                            message: format!("Save failed: {}", e),
+                            level: crate::NotificationLevel::Error,
+                        });
+                    }
+                }
+            } else {
+                self.save_as(control);
             }
-        } else {
-            self.save_as();
         }
     }
 
-    fn save_as(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .set_file_name(&self.name)
-            .save_file() 
-        {
-            if std::fs::write(&path, &self.code).is_ok() {
-                self.path = Some(path.clone());
-                self.name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                self.is_dirty = false;
-                
-                // 根据新扩展名更新语言
-                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-                self.language = match ext {
-                    "rs" => "rs",
-                    "py" => "py",
-                    "js" | "ts" => "js",
-                    "html" => "html",
-                    "css" => "css",
-                    "json" => "json",
-                    "md" => "md",
-                    "toml" => "toml",
-                    "c" | "h" => "c",
-                    "cpp" | "hpp" | "cc" | "cxx" => "cpp",
-                    _ => "txt",
-                }.to_string();
+    fn save_as(&mut self, control: &mut Vec<AppCommand>) {
+        if let EditorState::Ready = self.state {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_file_name(&self.name)
+                .save_file() 
+            {
+                match std::fs::write(&path, &self.code) {
+                    Ok(_) => {
+                        self.path = Some(path.clone());
+                        self.name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        self.is_dirty = false;
+                        
+                        // 根据新扩展名更新语言
+                        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                        self.language = match ext {
+                            "rs" => "rs",
+                            "py" => "py",
+                            "js" | "ts" => "js",
+                            "html" => "html",
+                            "css" => "css",
+                            "json" => "json",
+                            "md" => "md",
+                            "toml" => "toml",
+                            "c" | "h" => "c",
+                            "cpp" | "hpp" | "cc" | "cxx" => "cpp",
+                            _ => "txt",
+                        }.to_string();
+
+                        control.push(AppCommand::Notify {
+                            message: format!("Saved as {}", self.name),
+                            level: crate::NotificationLevel::Success,
+                        });
+                    }
+                    Err(e) => {
+                        control.push(AppCommand::Notify {
+                            message: format!("Save As failed: {}", e),
+                            level: crate::NotificationLevel::Error,
+                        });
+                    }
+                }
             }
         }
     }
@@ -67,14 +107,58 @@ impl CodeEditorTab {
 
 impl TabInstance for CodeEditorTab {
     fn title(&self) -> WidgetText {
-        let mut title = format!("{} {}", if self.is_dirty { "📝" } else { "" }, self.name);
+        let mut title = match self.state {
+            EditorState::Loading(_) => format!("⏳ {}", self.name),
+            EditorState::Error(_) => format!("❌ {}", self.name),
+            EditorState::Ready => format!("{} {}", if self.is_dirty { "📝" } else { "" }, self.name),
+        };
+        
         if self.is_dirty {
             title.push('*');
         }
         title.into()
     }
 
-    fn ui(&mut self, ui: &mut Ui, _control: &mut Vec<AppCommand>) {
+    fn ui(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
+        // 状态检查
+        let loaded_content = if let EditorState::Loading(ref result_store) = self.state {
+            let store = result_store.clone();
+            let guard = store.read();
+            guard.as_ref().cloned()
+        } else {
+            None
+        };
+
+        if let Some(res) = loaded_content {
+            match res {
+                Ok(content) => {
+                    self.code = content;
+                    self.state = EditorState::Ready;
+                }
+                Err(e) => {
+                    self.state = EditorState::Error(e);
+                }
+            }
+        }
+
+        if let EditorState::Loading(_) = self.state {
+            // 仍在加载
+            ui.centered_and_justified(|ui| {
+                ui.spinner();
+                ui.label("Loading file...");
+            });
+            ui.ctx().request_repaint(); // 持续刷新以检查状态
+            return;
+        }
+
+        if let EditorState::Error(ref e) = self.state {
+            ui.centered_and_justified(|ui| {
+                ui.label(format!("Failed to load file:\n{}", e));
+            });
+            return;
+        }
+
+        // 只有 Ready 状态才执行后续逻辑
         let language = self.language.clone();
         let mut layouter = move |ui: &egui::Ui, string: &str, wrap_width: f32| {
             let theme = egui_extras::syntax_highlighting::CodeTheme::from_memory(ui.ctx(), ui.style());
@@ -110,7 +194,7 @@ impl TabInstance for CodeEditorTab {
         ui.vertical(|ui| {
             // 快捷键监听: Ctrl + S 保存 (同步模式下禁用)
             if !self.sync_mode && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
-                self.save();
+                self.save(control);
             }
 
             egui::ScrollArea::both()
@@ -155,23 +239,28 @@ impl TabInstance for CodeEditorTab {
         });
     }
 
-    fn on_context_menu(&mut self, ui: &mut Ui, _control: &mut Vec<AppCommand>) {
-        if ui.add_enabled(!self.sync_mode, egui::Button::new("💾 Save")).clicked() {
-            self.save();
-            ui.close_menu();
-        }
-        if ui.button("📂 Save As...").clicked() {
-            self.save_as();
-            ui.close_menu();
-        }
-        ui.separator();
-        
-        let sync_text = if self.sync_mode { "🔄 Sync Mode: ON" } else { "🔄 Sync Mode: OFF" };
-        if ui.checkbox(&mut self.sync_mode, sync_text).clicked() {
-            if self.sync_mode {
-                self.last_sync_time = ui.input(|i| i.time);
+    fn on_context_menu(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
+        // 加载或错误时不显示完整菜单
+        if let EditorState::Ready = self.state {
+            if ui.add_enabled(!self.sync_mode, egui::Button::new("💾 Save")).clicked() {
+                self.save(control);
+                ui.close_menu();
             }
-            ui.close_menu();
+            if ui.button("📂 Save As...").clicked() {
+                self.save_as(control);
+                ui.close_menu();
+            }
+            ui.separator();
+            
+            let sync_text = if self.sync_mode { "🔄 Sync Mode: ON" } else { "🔄 Sync Mode: OFF" };
+            if ui.checkbox(&mut self.sync_mode, sync_text).clicked() {
+                if self.sync_mode {
+                    self.last_sync_time = ui.input(|i| i.time);
+                }
+                ui.close_menu();
+            }
+        } else {
+             ui.label("Please wait for file to load...");
         }
     }
 
@@ -183,7 +272,7 @@ impl TabInstance for CodeEditorTab {
 pub struct CodeEditorPlugin;
 
 impl Plugin for CodeEditorPlugin {
-    fn name(&self) -> &str { "code_editor" }
+    fn name(&self) -> &str { crate::plugins::PLUGIN_NAME_CODE_EDITOR }
 
     fn dependencies(&self) -> Vec<String> {
         vec!["core".to_string()]
@@ -209,14 +298,25 @@ impl Plugin for CodeEditorPlugin {
 
         // 如果是已知文本格式或没有扩展名（可能是 README 等）
         if !language.is_empty() || ext.is_empty() {
-             if let Ok(content) = std::fs::read_to_string(path) {
-                 return Some(Box::new(CodeEditorTab::new(
-                     path.file_name().unwrap_or_default().to_string_lossy().to_string(),
-                     Some(path.to_path_buf()),
-                     content,
-                     language.to_string(),
-                 )));
-             }
+            let path_owned = path.to_path_buf();
+            let result_store = Arc::new(RwLock::new(None));
+            let result_store_clone = result_store.clone();
+
+            std::thread::spawn(move || {
+                let res = std::fs::read_to_string(&path_owned).map_err(|e| e.to_string());
+                *result_store_clone.write() = Some(res);
+            });
+
+            return Some(Box::new(CodeEditorTab {
+                name: path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                path: Some(path.to_path_buf()),
+                code: String::new(),
+                language: language.to_string(),
+                is_dirty: false,
+                sync_mode: false,
+                last_sync_time: 0.0,
+                state: EditorState::Loading(result_store),
+            }));
         }
         None
     }
