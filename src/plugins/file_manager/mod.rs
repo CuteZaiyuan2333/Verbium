@@ -70,16 +70,7 @@ impl FileExplorerTab {
                 is_expanded
             );
 
-            // We sync the internal state with our external state if needed, 
-            // but `load_with_default_open` handles persistence. 
-            // However, we want to respect our `expanded_nodes` set strictly or sync them.
-            // Actually, best practice with CollapsingState + external storage is to set it.
-            let mut state = state;
-            state.set_open(is_expanded);
-
-            let mut is_open = false;
-
-            state.show_header(ui, |ui| {
+            let header_response = state.show_header(ui, |ui| {
                 // Text styling
                 let mut text = RichText::new(format!("📁 {}", name));
                 if is_selected {
@@ -87,7 +78,6 @@ impl FileExplorerTab {
                 }
 
                 // Render the label (Interactive for selection and DnD)
-                // We use SelectableLabel to handle the visual selection state nicely
                 let response = ui.add(egui::SelectableLabel::new(is_selected, text)).interact(egui::Sense::drag());
                 
                 // D&D: Drag Source
@@ -133,9 +123,16 @@ impl FileExplorerTab {
                 response.context_menu(|ui| {
                     self.context_menu_items(ui, &path, control, name.clone());
                 });
-            })
-            .body(|ui| {
-                is_open = true; // If this closure is called, the folder is open
+            });
+
+            // Sync expanded state using header_response
+            if header_response.is_open() {
+                self.expanded_nodes.insert(path.clone());
+            } else {
+                self.expanded_nodes.remove(&path);
+            }
+
+            header_response.body(|ui| {
                 if let Ok(entries) = std::fs::read_dir(&path) {
                     let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
                     paths.sort_by(|a, b| {
@@ -153,13 +150,6 @@ impl FileExplorerTab {
                     }
                 }
             });
-
-            // Update our external expanded state based on what the internal state became
-            if is_open {
-                self.expanded_nodes.insert(path.clone());
-            } else {
-                self.expanded_nodes.remove(&path);
-            }
 
         } else {
             // File display
@@ -218,8 +208,11 @@ impl FileExplorerTab {
                 self.selected_items.insert(path.clone());
             }
         } else {
+            let was_selected = self.selected_items.contains(path) && self.selected_items.len() == 1;
             self.selected_items.clear();
-            self.selected_items.insert(path.clone());
+            if !was_selected {
+                self.selected_items.insert(path.clone());
+            }
         }
     }
 
@@ -394,14 +387,18 @@ impl TabInstance for FileExplorerTab {
 
             // Content
             if let Some(root) = self.root_path.clone() {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    // Clicking on empty area clears selection
-                    if ui.input(|i| i.pointer.primary_clicked()) && !ui.rect_contains_pointer(ui.min_rect()) {
-                         // This check is hard inside ScrollArea which expands.
-                         // Simplified: relying on item clicks.
-                    }
-                    self.render_tree(ui, root, control);
-                });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        // Create a large empty area that catches clicks to clear selection
+                        let rect = ui.available_rect_before_wrap();
+                        let response = ui.interact(rect, Id::new("explorer_empty_area"), egui::Sense::click());
+                        if response.clicked() {
+                            self.selected_items.clear();
+                        }
+
+                        self.render_tree(ui, root, control);
+                    });
             } else {
                 ui.centered_and_justified(|ui| {
                     ui.label("No directory selected.\nClick the button above to start exploring.");
