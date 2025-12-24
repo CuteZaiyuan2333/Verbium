@@ -11,6 +11,9 @@ use crate::{Plugin, AppCommand, TabInstance, Tab};
 pub struct FileExplorerTab {
     root_path: Option<PathBuf>,
     expanded_nodes: HashSet<PathBuf>,
+    rename_path: Option<PathBuf>,
+    new_item_parent: Option<(PathBuf, bool)>, // (parent_path, is_dir)
+    input_text: String,
 }
 
 impl FileExplorerTab {
@@ -18,6 +21,9 @@ impl FileExplorerTab {
         Self {
             root_path: None,
             expanded_nodes: HashSet::new(),
+            rename_path: None,
+            new_item_parent: None,
+            input_text: String::new(),
         }
     }
 
@@ -53,7 +59,43 @@ impl FileExplorerTab {
                 }
             });
 
-            if response.header_response.clicked() {
+            let header_response = response.header_response;
+
+            header_response.context_menu(|ui| {
+                if ui.button("New File").clicked() {
+                    self.new_item_parent = Some((path.clone(), false));
+                    self.input_text = "new_file.txt".to_string();
+                    ui.close_menu();
+                }
+                if ui.button("New Folder").clicked() {
+                    self.new_item_parent = Some((path.clone(), true));
+                    self.input_text = "new_folder".to_string();
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Rename").clicked() {
+                    self.rename_path = Some(path.clone());
+                    self.input_text = name.clone();
+                    ui.close_menu();
+                }
+                if ui.button("Reveal in Explorer").clicked() {
+                    reveal_in_explorer(&path);
+                    ui.close_menu();
+                }
+                if ui.button("Copy Path").clicked() {
+                    ui.output_mut(|o| o.copied_text = path.to_string_lossy().to_string());
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Delete").clicked() {
+                    if let Ok(_) = std::fs::remove_dir_all(&path) {
+                        self.expanded_nodes.remove(&path);
+                    }
+                    ui.close_menu();
+                }
+            });
+
+            if header_response.clicked() {
                 if is_expanded {
                     self.expanded_nodes.remove(&path);
                 } else {
@@ -64,10 +106,55 @@ impl FileExplorerTab {
             // File display
             ui.horizontal(|ui| {
                 ui.add_space(16.0); // Indentation
-                if ui.selectable_label(false, format!("📄 {}", name)).double_clicked() {
+                let response = ui.selectable_label(false, format!("📄 {}", name));
+                
+                if response.double_clicked() {
                     control.push(AppCommand::OpenFile(path.clone()));
                 }
+
+                response.context_menu(|ui| {
+                    if ui.button("Open").clicked() {
+                        control.push(AppCommand::OpenFile(path.clone()));
+                        ui.close_menu();
+                    }
+                    if ui.button("Rename").clicked() {
+                        self.rename_path = Some(path.clone());
+                        self.input_text = name.clone();
+                        ui.close_menu();
+                    }
+                    if ui.button("Reveal in Explorer").clicked() {
+                        reveal_in_explorer(&path);
+                        ui.close_menu();
+                    }
+                    if ui.button("Copy Path").clicked() {
+                        ui.output_mut(|o| o.copied_text = path.to_string_lossy().to_string());
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Delete").clicked() {
+                        let _ = std::fs::remove_file(&path);
+                        ui.close_menu();
+                    }
+                });
             });
+        }
+    }
+}
+
+fn reveal_in_explorer(path: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let path_str = path.to_string_lossy().to_string();
+        if path.is_file() {
+            let _ = Command::new("explorer")
+                .arg("/select,")
+                .arg(path_str)
+                .spawn();
+        } else {
+            let _ = Command::new("explorer")
+                .arg(path_str)
+                .spawn();
         }
     }
 }
@@ -114,6 +201,62 @@ impl TabInstance for FileExplorerTab {
                 });
             }
         });
+
+        // Dialogs
+        if let Some(path) = self.rename_path.clone() {
+            let mut open = true;
+            egui::Window::new("Rename")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.label(format!("Old name: {}", path.file_name().unwrap_or_default().to_string_lossy()));
+                    ui.text_edit_singleline(&mut self.input_text);
+                    ui.horizontal(|ui| {
+                        if ui.button("Rename").clicked() {
+                            let new_path = path.parent().unwrap().join(&self.input_text);
+                            if let Ok(_) = std::fs::rename(&path, new_path) {
+                                self.rename_path = None;
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.rename_path = None;
+                        }
+                    });
+                });
+            if !open { self.rename_path = None; }
+        }
+
+        if let Some((parent, is_dir)) = self.new_item_parent.clone() {
+            let mut open = true;
+            let title = if is_dir { "New Folder" } else { "New File" };
+            egui::Window::new(title)
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.label(format!("Parent: {}", parent.to_string_lossy()));
+                    ui.text_edit_singleline(&mut self.input_text);
+                    ui.horizontal(|ui| {
+                        if ui.button("Create").clicked() {
+                            let new_path = parent.join(&self.input_text);
+                            let success = if is_dir {
+                                std::fs::create_dir_all(&new_path).is_ok()
+                            } else {
+                                std::fs::File::create(&new_path).is_ok()
+                            };
+                            if success {
+                                self.new_item_parent = None;
+                                self.expanded_nodes.insert(parent);
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.new_item_parent = None;
+                        }
+                    });
+                });
+            if !open { self.new_item_parent = None; }
+        }
     }
 
     fn box_clone(&self) -> Box<dyn TabInstance> {
