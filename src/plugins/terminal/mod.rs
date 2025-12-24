@@ -28,7 +28,7 @@ struct Cell {
 
 impl Default for Cell {
     fn default() -> Self {
-        Self { 
+        Self {
             c: ' ',
             fg: TERM_FG,
             bg: Color32::TRANSPARENT,
@@ -143,7 +143,7 @@ impl TerminalState {
             grid.push(vec![Cell::default(); c]);
             if !is_alt {
                 self.history.push(old_row);
-                if self.history.len() > 1000 { self.history.remove(0); }
+                if self.history.len() > 5000 { self.history.remove(0); }
             }
         } else {
             grid.remove(top);
@@ -496,7 +496,6 @@ pub struct TerminalTab {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     last_size: (usize, usize),
-    scroll_offset: usize,
     ctx: egui::Context,
     input_buffer: String,
     is_composing: bool,
@@ -518,7 +517,6 @@ impl Clone for TerminalTab {
             writer: self.writer.clone(),
             master: self.master.clone(),
             last_size: self.last_size,
-            scroll_offset: self.scroll_offset,
             ctx: self.ctx.clone(),
             input_buffer: String::new(),
             is_composing: false,
@@ -540,17 +538,11 @@ impl TabInstance for TerminalTab {
             Vec2::new(width, height)
         });
 
-        // Reserve space for the terminal
-        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        // 1. Calculate PTY size based on available area
+        let available_size = ui.available_size();
+        let cols = (available_size.x / char_size.x).floor() as usize;
+        let rows = (available_size.y / char_size.y).floor() as usize;
         
-        // Focus handling: Click to focus
-        if response.clicked() {
-            ui.memory_mut(|m| m.request_focus(response.id));
-        }
-
-        // Resize PTY if needed
-        let cols = (rect.width() / char_size.x).floor() as usize;
-        let rows = (rect.height() / char_size.y).floor() as usize;
         if cols > 0 && rows > 0 && (cols != self.last_size.0 || rows != self.last_size.1) {
             self.state.lock().resize(rows, cols);
             let _ = self.master.lock().resize(PtySize {
@@ -562,522 +554,237 @@ impl TabInstance for TerminalTab {
             self.last_size = (cols, rows);
         }
 
-        // --------------------------------------------------------------------
-        // Invisible Input Overlay
-        // --------------------------------------------------------------------
-        // We place a transparent TextEdit over the terminal area. 
-        // This widget will capture focus, IME input, and arrow keys (preventing focus loss).
-        
+        let state_lock = self.state.lock();
+        let history_len = state_lock.history.len();
+        let grid_len = state_lock.rows;
+        let total_rows = history_len + grid_len;
+        drop(state_lock);
+
         let mut output_to_write = String::new();
 
-        // Position the TextEdit exactly over the allocated rect
-        let input_response = ui.put(
-            rect,
-            egui::TextEdit::multiline(&mut self.input_buffer)
-                .id_source(response.id) // Use the same ID to share focus logic
-                .frame(false)
-                .text_color(Color32::TRANSPARENT)
-                .cursor_at_end(true)
-                .lock_focus(true) // Keep focus if possible
-                .desired_width(f32::INFINITY)
-        );
-
-        // If the user clicks the rect (which is now covered by TextEdit), ensure focus.
-        if input_response.clicked() {
-            input_response.request_focus();
-        }
-
-        // Handle Mouse Selection (using input_response which covers the area)
-        if input_response.hovered() {
-            if let Some(pos) = input_response.interact_pointer_pos() {
-                let rel_pos = pos - rect.min;
-                let col = (rel_pos.x / char_size.x).floor() as usize;
-                let row_rel = (rel_pos.y / char_size.y).floor() as usize;
+        // 2. Use ScrollArea for native scrolling and scrollbar
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .stick_to_bottom(true)
+            .show_viewport(ui, |ui, viewport| {
+                let content_size = Vec2::new(available_size.x, total_rows as f32 * char_size.y);
+                let (rect, response) = ui.allocate_at_least(content_size, Sense::click_and_drag());
                 
-                let state = self.state.lock();
-                let history_len = state.history.len();
-                let grid_len = state.grid().len();
-                let total_rows = history_len + grid_len;
-                let visible_start = total_rows.saturating_sub(rows + self.scroll_offset);
-                let row_idx = visible_start + row_rel;
-                drop(state);
-
-                if input_response.drag_started() {
-                    self.drag_start = Some((row_idx, col));
-                    self.selection_start = Some((row_idx, col));
-                    self.selection_end = Some((row_idx, col));
-                } else if input_response.dragged() {
-                    if let Some(_) = self.drag_start {
-                        self.selection_end = Some((row_idx, col));
-                    }
-                } else if input_response.clicked() {
-                    self.selection_start = None;
-                    self.selection_end = None;
-                    self.drag_start = None;
+                if response.clicked() {
+                    ui.memory_mut(|m| m.request_focus(response.id));
                 }
-            }
-        }
 
-        if input_response.has_focus() {
-            let mut writer = self.writer.lock();
-            let state = self.state.lock();
-            let is_app_mode = state.application_cursor;
-            drop(state); // Unlock early
-
-                        let mut text_to_copy = None;
-
-            
-
-                        // 1. Check IME State & Gather Events
-
-                        // We use a separate loop to scan events because we need to handle them in order 
-
-                        // and we shouldn't rely on TextEdit's buffer for the actual input content 
-
-                        // (it contains intermediate IME states).
-
-                        ui.input(|i| {
-
-                            for event in &i.events {
-
-                                match event {
-
-                                    egui::Event::Ime(ime_event) => {
-
-                                        match ime_event {
-
-                                            egui::ImeEvent::Preedit(text) => {
-
-                                                self.is_composing = !text.is_empty();
-
-                                            }
-
-                                            egui::ImeEvent::Commit(text) => {
-
-                                                self.is_composing = false;
-
-                                                output_to_write.push_str(&text);
-
-                                            }
-
-                                            egui::ImeEvent::Disabled => {
-
-                                                self.is_composing = false;
-
-                                            }
-
-                                            _ => {}
-
-                                        }
-
-                                    }
-
-                                    
-
-                                    egui::Event::Text(text) => {
-
-                                        // If text is a single control char that we handle via Keys, ignore it.
-
-                                        // This avoids double input for Enter (\n) and Tab (\t).
-
-                                        let is_handled_control = if text.len() == 1 {
-
-                                            let c = text.chars().next().unwrap();
-
-                                            c == '\n' || c == '\r' || c == '\t' || c == '\x08' || c == '\x7f'
-
-                                        } else {
-
-                                            false
-
-                                        };
-
-            
-
-                                        if !is_handled_control {
-
-                                            // For paste or normal text, we send it.
-
-                                            // We convert newlines to \r to ensure correct terminal behavior.
-
-                                            let fixed_text = text.replace("\n", "\r");
-
-                                            output_to_write.push_str(&fixed_text);
-
-                                        }
-
-                                    }
-
-            
-
-                                    egui::Event::Paste(text) => {
-
-                                        if !self.is_composing {
-
-                                            let fixed_text = text.replace("\n", "\r");
-
-                                            output_to_write.push_str(&fixed_text);
-
-                                        }
-
-                                    }
-
-            
-
-                                    egui::Event::Copy => {
-
-                                        if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
-
-                                            let (s, e) = if start <= end { (start, end) } else { (end, start) };
-
-                                            let state = self.state.lock();
-
-                                            let mut text = String::new();
-
-                                            
-
-                                            let history_len = state.history.len();
-
-                                            let total_rows = history_len + state.grid().len();
-
-                                            
-
-                                            for r in s.0..=e.0 {
-
-                                                if r >= total_rows { break; }
-
-                                                let cells = if r < history_len { &state.history[r] } else { &state.grid()[r - history_len] };
-
-                                                
-
-                                                let c_start = if r == s.0 { s.1 } else { 0 };
-
-                                                let c_end = if r == e.0 { (e.1 + 1).min(cells.len()) } else { cells.len() };
-
-                                                
-
-                                                                                    for c in c_start..c_end {
-
-                                                
-
-                                                                                        if c < cells.len() {
-
-                                                
-
-                                                                                            let cell = &cells[c];
-
-                                                
-
-                                                                                            if !cell.is_wide_continuation {
-
-                                                
-
-                                                                                                text.push(cell.c);
-
-                                                
-
-                                                                                            }
-
-                                                
-
-                                                                                        } else {
-
-                                                
-
-                                                                                            text.push(' ');
-
-                                                
-
-                                                                                        }
-
-                                                
-
-                                                                                    }
-
-                                                if r != e.0 { text.push('\n'); }
-
-                                            }
-
-                                            text_to_copy = Some(text);
-
-                                        }
-
-                                    }
-
-            
-
-                                    egui::Event::Key { key, pressed: true, modifiers, .. } => {
-
-                                        if self.is_composing {
-
-                                            continue;
-
-                                        }
-
-            
-
-                                        // Handle Copy (Ctrl+C) manual check
-
-                                        // We keep this as fallback, but if Event::Copy works, this might be redundant
-
-                                        // OR we use it to BLOCK sending \x03 if selection exists.
-
-                                        if *key == Key::C && modifiers.ctrl {
-
-                                            let has_selection = self.selection_start.is_some() && self.selection_end.is_some();
-
-                                            if has_selection {
-
-                                                // Assuming Event::Copy handles the actual copy
-
-                                                // We just want to prevent sending SIGINT
-
-                                                continue; 
-
-                                            }
-
-                                        }
-
-            
-
-                                        let seq = match key {
-
-                                            Key::Enter => Some("\r".to_string()),
-
-                                            Key::Backspace => Some("\x7f".to_string()),
-
-                                            Key::Tab => Some("\t".to_string()),
-
-                                            Key::Escape => Some("\x1b".to_string()),
-
-                                            Key::ArrowUp => Some(if is_app_mode { "\x1bOA" } else { "\x1b[A" }.to_string()),
-
-                                            Key::ArrowDown => Some(if is_app_mode { "\x1bOB" } else { "\x1b[B" }.to_string()),
-
-                                            Key::ArrowRight => Some(if is_app_mode { "\x1bOC" } else { "\x1b[C" }.to_string()),
-
-                                            Key::ArrowLeft => Some(if is_app_mode { "\x1bOD" } else { "\x1b[D" }.to_string()),
-
-                                            Key::Home => Some(if is_app_mode { "\x1bOH" } else { "\x1b[H" }.to_string()),
-
-                                            Key::End => Some(if is_app_mode { "\x1bOF" } else { "\x1b[F" }.to_string()),
-
-                                            Key::PageUp => Some("\x1b[5~".to_string()),
-
-                                            Key::PageDown => Some("\x1b[6~".to_string()),
-
-                                            Key::Insert => Some("\x1b[2~".to_string()),
-
-                                            Key::Delete => Some("\x1b[3~".to_string()),
-
-                                            
-
-                                            _ if modifiers.ctrl => {
-
-                                                let k = format!("{:?}", key);
-
-                                                if k.len() == 1 {
-
-                                                    let c = k.chars().next().unwrap();
-
-                                                    if c >= 'A' && c <= 'Z' {
-
-                                                        // Handle Ctrl+V separately via Event::Paste
-
-                                                        if c == 'V' { None }
-
-                                                        else { Some(((c as u8 - b'A' + 1) as char).to_string()) }
-
-                                                    } else { None }
-
-                                                } else {
-
-                                                    match key {
-
-                                                        Key::C => Some("\x03".to_string()),
-
-                                                        Key::D => Some("\x04".to_string()),
-
-                                                        Key::L => Some("\x0c".to_string()),
-
-                                                        Key::Z => Some("\x1a".to_string()),
-
-                                                        _ => None
-
-                                                    }
-
-                                                }
-
-                                            }
-
-                                            _ => None,
-
-                                        };
-
-            
-
-                                        if let Some(s) = seq {
-
-                                            output_to_write.push_str(&s);
-
-                                        }
-
-                                    }
-
-                                    _ => {}
-
-                                }
-
-                            }
-
-                        });
-
-            
-
-                        // Set clipboard outside of ui.input closure to avoid potential deadlocks/conflicts
-
-                        if let Some(text) = text_to_copy {
-
-                            ui.output_mut(|o| o.copied_text = text);
-
-                        }
-
-            // Clean the dummy buffer only when not composing to prevent infinite growth
-            // but preserve it during composition so egui can do its preview thing.
-            if !self.is_composing {
-                self.input_buffer.clear();
-            }
-
-            if !output_to_write.is_empty() {
-                let _ = writer.write_all(output_to_write.as_bytes());
-            }
-        }
-
-        // Scrolling
-        // We check `input_response.hovered()` because the TextEdit is covering the rect.
-        if input_response.hovered() {
-            let delta = ui.input(|i| i.smooth_scroll_delta.y);
-            if delta != 0.0 {
-                let lines = (delta / char_size.y).round() as isize;
-                let state = self.state.lock();
-                let history_len = state.history.len();
-                if lines > 0 {
-                    self.scroll_offset = self.scroll_offset.saturating_add(lines as usize);
-                } else {
-                    self.scroll_offset = self.scroll_offset.saturating_sub((-lines) as usize);
-                }
-                self.scroll_offset = self.scroll_offset.min(history_len);
-            }
-        }
-
-        // Render
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, TERM_BG);
-
-        let state = self.state.lock();
-        let history = &state.history;
-        let grid = state.grid();
-        
-        let total_rows = history.len() + grid.len();
-        let visible_start = total_rows.saturating_sub(rows + self.scroll_offset);
-        
-        for r in 0..rows {
-            let row_idx = visible_start + r;
-            if row_idx >= total_rows { break; }
-            
-            let cells = if row_idx < history.len() {
-                &history[row_idx]
-            } else {
-                &grid[row_idx - history.len()]
-            };
-
-            let row_pos = rect.min + Vec2::new(0.0, r as f32 * char_size.y);
-            
-            // 0. Selection Background
-            // Prepare selection highlight range
-            let mut selection_range = None;
-            if let (Some(s), Some(e)) = (self.selection_start, self.selection_end) {
-                let (start, end) = if s <= e { (s, e) } else { (e, s) };
-                selection_range = Some((start, end));
-            }
-
-            if let Some((s, e)) = selection_range {
-                // Check if this row is involved in selection
-                if row_idx >= s.0 && row_idx <= e.0 {
-                    let c_start = if row_idx == s.0 { s.1 } else { 0 };
-                    // Selection end is inclusive index, so render up to e.1 + 1
-                    let c_end = if row_idx == e.0 { (e.1 + 1).min(cols) } else { cols };
-                    
-                    if c_start < c_end {
-                        let sel_rect = Rect::from_min_size(
-                            row_pos + Vec2::new(c_start as f32 * char_size.x, 0.0),
-                            Vec2::new((c_end - c_start) as f32 * char_size.x, char_size.y)
-                        );
-                        painter.rect_filled(sel_rect, 0.0, Color32::from_rgba_premultiplied(100, 100, 150, 100));
-                    }
-                }
-            }
-
-            // 1. First Phase: Background
-            let mut c_idx = 0;
-            while c_idx < cells.len().min(cols) {
-                let cell = &cells[c_idx];
-                let mut bg = cell.bg;
-                if cell.inverse {
-                    bg = if cell.fg == Color32::TRANSPARENT { TERM_FG } else { cell.fg };
-                }
-                
-                let start_x = c_idx;
-                c_idx += 1;
-                while c_idx < cells.len().min(cols) {
-                    let next = &cells[c_idx];
-                    let mut next_bg = next.bg;
-                    if next.inverse {
-                        next_bg = if next.fg == Color32::TRANSPARENT { TERM_FG } else { next.fg };
-                    }
-                    if next_bg != bg { break; }
-                    c_idx += 1;
-                }
-                
-                if bg != Color32::TRANSPARENT && bg != TERM_BG {
-                    let bg_rect = Rect::from_min_size(
-                        row_pos + Vec2::new(start_x as f32 * char_size.x, 0.0),
-                        Vec2::new((c_idx - start_x) as f32 * char_size.x, char_size.y)
-                    );
-                    painter.rect_filled(bg_rect, 0.0, bg);
-                }
-            }
-
-            // 2. 第二阶段：绘制文字
-            for (c_idx, cell) in cells.iter().enumerate().take(cols) {
-                if cell.is_wide_continuation || cell.c == ' ' { continue; }
-                
-                let mut fg = cell.fg;
-                if cell.inverse {
-                    fg = if cell.bg == Color32::TRANSPARENT { TERM_BG } else { cell.bg };
-                }
-                if fg == Color32::TRANSPARENT { fg = TERM_FG; }
-                
-                let cell_pos = row_pos + Vec2::new(c_idx as f32 * char_size.x, 0.0);
-                let mut job = LayoutJob::default();
-                job.append(
-                    &cell.c.to_string(),
-                    0.0,
-                    TextFormat {
-                        font_id: font_id.clone(),
-                        color: fg,
-                        ..Default::default()
-                    }
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(viewport.translate(rect.min.to_vec2()), 0.0, TERM_BG);
+
+                // Invisible Input Overlay over viewport
+                let input_rect = viewport.translate(rect.min.to_vec2());
+                let input_response = ui.put(
+                    input_rect,
+                    egui::TextEdit::multiline(&mut self.input_buffer)
+                        .id_source(response.id)
+                        .frame(false)
+                        .text_color(Color32::TRANSPARENT)
+                        .cursor_at_end(true)
+                        .lock_focus(true)
+                        .desired_width(f32::INFINITY)
                 );
-                painter.galley(cell_pos, ui.fonts(|f| f.layout_job(job)), Color32::TRANSPARENT);
-            }
 
-            // 3. 第三阶段：绘制光标
-            if state.cursor_visible && (row_idx == (history.len() + state.cursor_row)) {
-                let cursor_pos = row_pos + Vec2::new(state.cursor_col as f32 * char_size.x, 0.0);
-                painter.rect_filled(Rect::from_min_size(cursor_pos, char_size), 0.0, Color32::from_gray(200).linear_multiply(0.5));
-            }
-        }
+                if input_response.clicked() {
+                    input_response.request_focus();
+                }
+
+                // Handle Mouse Selection
+                if input_response.hovered() {
+                    if let Some(pos) = input_response.interact_pointer_pos() {
+                        let rel_pos = pos - rect.min;
+                        let col = (rel_pos.x / char_size.x).floor() as usize;
+                        let row_idx = (rel_pos.y / char_size.y).floor() as usize;
+                        
+                        if input_response.drag_started() {
+                            self.drag_start = Some((row_idx, col));
+                            self.selection_start = Some((row_idx, col));
+                            self.selection_end = Some((row_idx, col));
+                        } else if input_response.dragged() {
+                            if let Some(_) = self.drag_start {
+                                self.selection_end = Some((row_idx, col));
+                            }
+                        } else if input_response.clicked() {
+                            self.selection_start = None;
+                            self.selection_end = None;
+                            self.drag_start = None;
+                        }
+                    }
+                }
+
+                if input_response.has_focus() || input_response.lost_focus() {
+                    let mut writer = self.writer.lock();
+                    let state = self.state.lock();
+                    let is_app_mode = state.application_cursor;
+                    drop(state);
+        
+                    let mut text_to_copy = None;
+                    ui.input(|i| {
+                        for event in &i.events {
+                            match event {
+                                egui::Event::Ime(ime_event) => {
+                                    match ime_event {
+                                        egui::ImeEvent::Preedit(text) => { self.is_composing = !text.is_empty(); }
+                                        egui::ImeEvent::Commit(text) => { self.is_composing = false; output_to_write.push_str(&text); }
+                                        egui::ImeEvent::Disabled => { self.is_composing = false; }
+                                        _ => {}
+                                    }
+                                }
+                                egui::Event::Text(text) => {
+                                    let is_handled_control = if text.len() == 1 {
+                                        let c = text.chars().next().unwrap();
+                                        c == '\n' || c == '\r' || c == '\t' || c == '\x08' || c == '\x7f' || c == '\x1b'
+                                    } else { false };
+                                    if !is_handled_control { output_to_write.push_str(&text.replace("\n", "\r")); }
+                                }
+                                egui::Event::Paste(text) => {
+                                    if !self.is_composing { output_to_write.push_str(&text.replace("\n", "\r")); }
+                                }
+                                egui::Event::Copy => {
+                                    if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+                                        let (s, e) = if start <= end { (start, end) } else { (end, start) };
+                                        let state = self.state.lock();
+                                        let mut text = String::new();
+                                        let history_len = state.history.len();
+                                        let total_rows = history_len + state.rows;
+                                        for r in s.0..=e.0 {
+                                            if r >= total_rows { break; }
+                                            let cells = if r < history_len { &state.history[r] } else { &state.grid()[r - history_len] };
+                                            let c_start = if r == s.0 { s.1 } else { 0 };
+                                            let c_end = if r == e.0 { (e.1 + 1).min(cells.len()) } else { cells.len() };
+                                            for c in c_start..c_end {
+                                                if c < cells.len() {
+                                                    let cell = &cells[c];
+                                                    if !cell.is_wide_continuation { text.push(cell.c); }
+                                                } else { text.push(' '); }
+                                            }
+                                            if r != e.0 { text.push('\n'); }
+                                        }
+                                        text_to_copy = Some(text);
+                                    }
+                                }
+                                egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                                    if self.is_composing { continue; }
+                                    if *key == Key::C && modifiers.ctrl {
+                                        if self.selection_start.is_some() && self.selection_end.is_some() { continue; }
+                                    }
+                                    let seq = match key {
+                                        Key::Enter => Some("\r".to_string()),
+                                        Key::Backspace => Some("\x7f".to_string()),
+                                        Key::Tab => Some("\t".to_string()),
+                                        Key::Escape => Some("\x1b".to_string()),
+                                        Key::ArrowUp => Some(if is_app_mode { "\x1bOA" } else { "\x1b[A" }.to_string()),
+                                        Key::ArrowDown => Some(if is_app_mode { "\x1bOB" } else { "\x1b[B" }.to_string()),
+                                        Key::ArrowRight => Some(if is_app_mode { "\x1bOC" } else { "\x1b[C" }.to_string()),
+                                        Key::ArrowLeft => Some(if is_app_mode { "\x1bOD" } else { "\x1b[D" }.to_string()),
+                                        Key::Home => Some(if is_app_mode { "\x1bOH" } else { "\x1b[H" }.to_string()),
+                                        Key::End => Some(if is_app_mode { "\x1bOF" } else { "\x1b[F" }.to_string()),
+                                        Key::PageUp => Some("\x1b[5~".to_string()),
+                                        Key::PageDown => Some("\x1b[6~".to_string()),
+                                        Key::Insert => Some("\x1b[2~".to_string()),
+                                        Key::Delete => Some("\x1b[3~".to_string()),
+                                        _ if modifiers.ctrl => {
+                                            match key {
+                                                Key::A => Some("\x01".to_string()), Key::B => Some("\x02".to_string()),
+                                                Key::C => Some("\x03".to_string()), Key::D => Some("\x04".to_string()),
+                                                Key::E => Some("\x05".to_string()), Key::F => Some("\x06".to_string()),
+                                                Key::G => Some("\x07".to_string()), Key::H => Some("\x08".to_string()),
+                                                Key::I => Some("\x09".to_string()), Key::J => Some("\x0a".to_string()),
+                                                Key::K => Some("\x0b".to_string()), Key::L => Some("\x0c".to_string()),
+                                                Key::M => Some("\x0d".to_string()), Key::N => Some("\x0e".to_string()),
+                                                Key::O => Some("\x0f".to_string()), Key::P => Some("\x10".to_string()),
+                                                Key::Q => Some("\x11".to_string()), Key::R => Some("\x12".to_string()),
+                                                Key::S => Some("\x13".to_string()), Key::T => Some("\x14".to_string()),
+                                                Key::U => Some("\x15".to_string()), Key::W => Some("\x17".to_string()),
+                                                Key::X => Some("\x18".to_string()), Key::Y => Some("\x19".to_string()),
+                                                Key::Z => Some("\x1a".to_string()), Key::OpenBracket => Some("\x1b".to_string()),
+                                                Key::Backslash => Some("\x1c".to_string()), Key::CloseBracket => Some("\x1d".to_string()),
+                                                _ => None,
+                                            }
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some(s) = seq { output_to_write.push_str(&s); }
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+                    if let Some(text) = text_to_copy { ui.output_mut(|o| o.copied_text = text); }
+                    if !self.is_composing { self.input_buffer.clear(); }
+                    if !output_to_write.is_empty() { let _ = writer.write_all(output_to_write.as_bytes()); }
+                }
+
+                // Render visible content
+                let state = self.state.lock();
+                let history = &state.history;
+                let grid = state.grid();
+                let start_row = (viewport.min.y / char_size.y).floor() as usize;
+                let end_row = (viewport.max.y / char_size.y).ceil() as usize;
+
+                for row_idx in start_row..end_row.min(total_rows) {
+                    let cells = if row_idx < history.len() { &history[row_idx] } else { &grid[row_idx - history.len()] };
+                    let row_pos = rect.min + Vec2::new(0.0, row_idx as f32 * char_size.y);
+                    
+                    if let (Some(s), Some(e)) = (self.selection_start, self.selection_end) {
+                        let (start, end) = if s <= e { (s, e) } else { (e, s) };
+                        if row_idx >= start.0 && row_idx <= end.0 {
+                            let c_start = if row_idx == start.0 { start.1 } else { 0 };
+                            let c_end = if row_idx == end.0 { (end.1 + 1).min(cols) } else { cols };
+                            if c_start < c_end {
+                                let sel_rect = Rect::from_min_size(
+                                    row_pos + Vec2::new(c_start as f32 * char_size.x, 0.0),
+                                    Vec2::new((c_end - c_start) as f32 * char_size.x, char_size.y)
+                                );
+                                painter.rect_filled(sel_rect, 0.0, Color32::from_rgba_premultiplied(100, 100, 150, 100));
+                            }
+                        }
+                    }
+
+                    // Background and Text rendering
+                    let mut c_idx = 0;
+                    while c_idx < cells.len().min(cols) {
+                        let cell = &cells[c_idx];
+                        let mut bg = cell.bg;
+                        if cell.inverse { bg = if cell.fg == Color32::TRANSPARENT { TERM_FG } else { cell.fg }; }
+                        let start_x = c_idx;
+                        c_idx += 1;
+                        while c_idx < cells.len().min(cols) {
+                            let next = &cells[c_idx];
+                            let mut next_bg = next.bg;
+                            if next.inverse { next_bg = if next.fg == Color32::TRANSPARENT { TERM_FG } else { next.fg }; }
+                            if next_bg != bg { break; }
+                            c_idx += 1;
+                        }
+                        if bg != Color32::TRANSPARENT && bg != TERM_BG {
+                            let bg_rect = Rect::from_min_size(row_pos + Vec2::new(start_x as f32 * char_size.x, 0.0), Vec2::new((c_idx - start_x) as f32 * char_size.x, char_size.y));
+                            painter.rect_filled(bg_rect, 0.0, bg);
+                        }
+                    }
+
+                    for (c_idx, cell) in cells.iter().enumerate().take(cols) {
+                        if cell.is_wide_continuation || cell.c == ' ' { continue; }
+                        let mut fg = cell.fg;
+                        if cell.inverse { fg = if cell.bg == Color32::TRANSPARENT { TERM_BG } else { cell.bg }; }
+                        if fg == Color32::TRANSPARENT { fg = TERM_FG; }
+                        let cell_pos = row_pos + Vec2::new(c_idx as f32 * char_size.x, 0.0);
+                        let mut job = LayoutJob::default();
+                        job.append(&cell.c.to_string(), 0.0, TextFormat { font_id: font_id.clone(), color: fg, ..Default::default() });
+                        painter.galley(cell_pos, ui.fonts(|f| f.layout_job(job)), Color32::TRANSPARENT);
+                    }
+
+                    if state.cursor_visible && (row_idx == (history.len() + state.cursor_row)) {
+                        let cursor_pos = row_pos + Vec2::new(state.cursor_col as f32 * char_size.x, 0.0);
+                        painter.rect_filled(Rect::from_min_size(cursor_pos, char_size), 0.0, Color32::from_gray(200).linear_multiply(0.5));
+                    }
+                }
+            });
+
         ui.ctx().request_repaint();
     }
 
@@ -1145,7 +852,6 @@ fn create_terminal_tab(ctx: egui::Context) -> anyhow::Result<TerminalTab> {
         writer: Arc::new(Mutex::new(writer)),
         master: Arc::new(Mutex::new(pair.master)),
         last_size: (80, 24),
-        scroll_offset: 0,
         ctx,
         input_buffer: String::new(),
         is_composing: false,
