@@ -1,0 +1,4 @@
+project_dir = 'G:\Document-3\verbium'
+enabled_plugins = ["manager"]
+build_and_run = false
+build_mode = "Release"

@@ -6,6 +6,9 @@ pub mod code_editor;
 #[cfg(feature = "plugin_file_manager")]
 pub mod file_manager;
 
+#[cfg(feature = "plugin_manager")]
+pub mod manager;
+
 #[cfg(feature = "plugin_terminal")]
 pub mod terminal;
 
@@ -18,6 +21,8 @@ pub mod test_plugin;
 pub const PLUGIN_NAME_CODE_EDITOR: &str = "code_editor";
 #[cfg(feature = "plugin_file_manager")]
 pub const PLUGIN_NAME_FILE_MANAGER: &str = "file_manager";
+#[cfg(feature = "plugin_manager")]
+pub const PLUGIN_NAME_MANAGER: &str = "manager";
 #[cfg(feature = "plugin_terminal")]
 pub const PLUGIN_NAME_TERMINAL: &str = "terminal";
 #[cfg(feature = "plugin_test_plugin")]
@@ -35,6 +40,12 @@ pub fn get_extra_plugins() -> Vec<Box<dyn crate::Plugin>> {
         {
             let p = Box::new(file_manager::create());
             assert_eq!(p.name(), PLUGIN_NAME_FILE_MANAGER, "Plugin name mismatch for file_manager");
+            plugins.push(p);
+        }
+        #[cfg(feature = "plugin_manager")]
+        {
+            let p = Box::new(manager::create());
+            assert_eq!(p.name(), PLUGIN_NAME_MANAGER, "Plugin name mismatch for manager");
             plugins.push(p);
         }
         #[cfg(feature = "plugin_terminal")]

@@ -1,0 +1,16 @@
+[plugin]
+name = "manager"
+display_name = "Verbium Launcher"
+version = "0.1.0"
+author = "Verbium Team"
+description = "Integrated Verbium project manager and plugin builder."
+dependencies = ["core"]
+
+[external_dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+toml_edit = "0.22"
+walkdir = "2.3"
+rfd = "0.15"
+anyhow = "1.0"
+zip = "0.6"
