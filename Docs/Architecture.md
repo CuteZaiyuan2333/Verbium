@@ -31,13 +31,13 @@
 - **Core Plugin**：提供基础功能（退出、布局重置、关于页面）。
 - **User Plugins**：实现具体业务（如 Code Editor, File Manager）。
 
-### 2.3 Launcher
-位于 `launcher/`。
+### 2.3 Launcher (Integrated)
+位于 `src/plugins/manager/`。
 - **职责**：
     - 扫描插件目录 (`plugin.toml`).
-    - 修改根目录 `Cargo.toml` 注入依赖。
-    - 生成注册代码。
-    - 调用 `cargo` 命令构建项目。
+    - 修改根目录 `Cargo.toml` 注入依赖与 Features。
+    - 自举构建：调用 `cargo` 构建包含全量插件的定制版本。
+- **自举原理**：用户首先启动一个仅包含 `manager` 的极简版 Verbium，然后在其中配置并“进化”出完整功能的编辑器。
 
 ## 3. 通信与交互机制
 

@@ -50,7 +50,11 @@ struct PluginInfo {
     #[allow(dead_code)]
     version: String,
     #[allow(dead_code)]
+    author: String,
+    #[allow(dead_code)]
     description: String,
+    #[allow(dead_code)]
+    dependencies: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

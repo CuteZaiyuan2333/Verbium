@@ -31,16 +31,21 @@ pub fn create() -> MyToolPlugin {
 ```
 
 ### 1.2 `plugin.toml` (元数据与依赖)
-必须包含。用于定义插件 ID 和外部 crate 依赖。
+
+必须包含。用于定义插件 ID、展示名称、作者信息以及外部 crate 依赖。
 
 ```toml
 [plugin]
-name = "my_tool"
+name = "my_tool"              # 内部 ID（需与模块名一致）
+display_name = "我的工具"      # 在 Launcher 中显示的名称
 version = "0.1.0"
+author = "Your Name"
 description = "A sample tool"
+dependencies = ["core"]       # 依赖的其他插件 ID
 
 [external_dependencies]
 serde = { version = "1.0", features = ["derive"] }
+rand = "0.8"
 ```
 
 ---
