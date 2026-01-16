@@ -11,15 +11,15 @@ cargo run --release
 ```
 
 **默认行为**：
-*   初始编译将仅启用 `plugin_manager`（即 Verbium Launcher）。
-*   启动后，你可以在界面内选择项目目录、勾选需要启用的功能插件（如 Terminal, Code Editor 等）。
-*   点击 **🔨 Build** 或 **▶ Run**，Verbium 将自动同步配置并重新编译出完整功能的编辑器。
+*   默认编译将启用所有核心功能插件（Terminal, Code Editor, File Manager, Agent 等）。
+*   启动后，你可以直接使用完整的编辑器功能。
+*   如果你需要管理插件或重新编译定制版本，可以点击界面内的 **🚀 Launcher** 标签页进入集成启动器。
 
 ## 🏗 自举架构 (Self-Bootstrapping)
 
 我们废弃了传统的独立 Launcher 开发模式，转而使用 Verbium 框架自身来开发启动器插件：
 
-1.  **轻量级核心**：默认仅编译启动器插件，生成一个极小的二进制文件。
+1.  **高度集成**：启动器逻辑作为 `manager` 插件存在，与编辑器环境无缝融合。
 2.  **插件管理**：在编辑器内直接管理 `.verbium` 插件包、同步 `Cargo.toml` 依赖。
 3.  **开发者友好**：插件开发者可以一边编写代码，一边通过内置的 Launcher 插件实时重新构建整个编辑器环境。
 
@@ -32,7 +32,7 @@ cargo run --release
 
 ## 📦 部署建议
 
-你可以通过 `cargo run` 编译出一个纯启动器版本的 `verbium.exe`，将其拷贝到任何地方作为你的“编辑器管理中心”。通过它，你可以自由构建出适合不同开发场景的 Verbium 定制版本。
+直接从 GitHub Releases 下载预编译的 `verbium-launcher.exe`（仅包含启动器功能的轻量级版本）作为你的“编辑器管理中心”。或者，你也可以直接使用 `cargo build --release` 生成的全功能版本。
 
 ## 📜 许可证
 
