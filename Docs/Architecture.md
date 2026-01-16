@@ -31,13 +31,10 @@
 - **Core Plugin**：提供基础功能（退出、布局重置、关于页面）。
 - **User Plugins**：实现具体业务（如 Code Editor, File Manager）。
 
-### 2.3 Launcher (Integrated)
-位于 `src/plugins/manager/`。
-- **职责**：
-    - 扫描插件目录 (`plugin.toml`).
-    - 修改根目录 `Cargo.toml` 注入依赖与 Features。
-    - 自举构建：管理并调用 `cargo` 构建符合用户配置的编辑器版本。
-- **工作流**：由于仓库状态不保证启用所有插件，用户需首先启动基础版本，利用 `manager` 插件勾选所需功能并同步依赖，最后触发重新编译以生成最终的生产环境。
+### 2.3 Launcher (External & Integrated)
+- **External Launcher**：用户首先从 Release 下载预编译的二进制文件。它是项目的入口点，负责引导用户配置项目路径、勾选插件并执行初始编译。
+- **Integrated Manager**：编译完成后，功能完整的编辑器内部依然包含 `manager` 插件，其逻辑与外部启动器一致，允许在开发过程中持续迭代构建。
+- **自举原理**：通过外部启动器“激活”源码仓库，根据配置同步 `Cargo.toml` 依赖与 Features，最终生成定制化的编辑器可执行文件。
 
 ## 3. 通信与交互机制
 

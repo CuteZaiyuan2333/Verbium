@@ -4,26 +4,27 @@ Verbium 是一款采用**静态插件架构**的高性能、可扩展代码编�
 
 ## 🚀 快速开始
 
-Verbium 采用集成化构建流程。克隆项目后，首先运行以启动基础环境：
+Verbium 采用“启动器驱动”的构建模式。为了获得最佳体验，请遵循以下流程：
 
-```bash
-cargo run --release
-```
-
-**推荐工作流**：
-1.  **启动**：运行后将进入包含 `plugin_manager` (Launcher) 的界面。
-2.  **配置**：在界面内选择项目目录，并根据需要勾选功能插件（如 Terminal, Code Editor, Agent 等）。
-3.  **构建**：点击 **🔨 Build** 或 **▶ Run**，Verbium 会自动同步配置并编译出你定制的编辑器版本。
-
-> **注意**：仓库中的 `Cargo.toml` 默认配置可能仅启用部分核心插件。请务必使用内置 Launcher 进行首次环境配置。
+1.  **准备环境**：确保你的系统已安装 [Rust 编译环境](https://www.rust-lang.org/)。
+2.  **获取源码**：克隆本仓库到本地。
+    ```bash
+    git clone https://github.com/CuteZaiyuan2333/Verbium.git
+    ```
+3.  **下载启动器**：从本仓库的 [Releases](https://github.com/CuteZaiyuan2333/Verbium/releases) 页面下载最新版本的 `verbium-launcher.exe`。
+4.  **配置与编译**：
+    *   运行下载的 `verbium-launcher.exe`。
+    *   在界面中选择你刚才克隆的项目根目录。
+    *   根据需求勾选插件（如 Terminal, Code Editor 等）。
+    *   点击 **▶ Build & Run**，启动器将自动完成依赖同步并为你编译出完整的编辑器。
 
 ## 🏗 自举架构 (Self-Bootstrapping)
 
-我们通过 Verbium 框架自身来管理编辑器的构建过程：
+我们通过一个轻量级的独立启动器来引导整个编辑器的生命周期：
 
-1.  **集成管理**：启动器逻辑 (`manager` 插件) 深度集成于编辑器中，负责环境的一键配置。
-2.  **按需编译**：用户根据实际需求选择插件组合，通过 Launcher 自动触发 `cargo` 编译，生成高性能的静态二进制文件。
-3.  **开发同步**：插件开发者可以通过 Launcher 实时同步依赖并重新构建，实现高效的迭代开发。
+1.  **外部引导**：用户通过预编译的 `verbium-launcher.exe` 介入构建流程，无需手动修改配置文件。
+2.  **动态进化**：启动器根据用户勾选的插件实时重写 `Cargo.toml`，并调用 `cargo` 编译出针对当前环境优化的生产版本。
+3.  **开发闭环**：在生成的编辑器内部，依然保留了 `manager` 插件（集成启动器），方便开发者在运行期间随时调整配置并重新构建。
 
 ## 🛠 功能特性
 
