@@ -11,11 +11,11 @@ egui_dock = "0.14.0"
 # --- BEGIN PLUGIN DEPENDENCIES ---
 # From manager
 anyhow = "1.0"
-# From manager
-rfd = "0.15"
-# From manager
+# From agent & manager
+rfd = "0.14"
+# From agent & manager
 serde = { features = ["derive"], version = "1.0" }
-# From manager
+# From agent & manager
 toml = "0.8"
 # From manager
 toml_edit = "0.22"
@@ -26,7 +26,8 @@ zip = "0.6"
 # --- END PLUGIN DEPENDENCIES ---
 
 [features]
-default = ["plugin_manager"]
+default = ["plugin_agent", "plugin_manager"]
+plugin_agent = []
 plugin_code_editor = []
 plugin_file_manager = []
 plugin_manager = []

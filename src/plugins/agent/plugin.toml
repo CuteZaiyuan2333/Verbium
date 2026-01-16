@@ -1,0 +1,12 @@
+[plugin]
+name = "agent"
+display_name = "Agent Tab"
+version = "0.1.0"
+author = "Verbium Agent"
+description = "A Rhai-script-driven agent plugin that supports highly customizable workflows."
+dependencies = ["core"]
+
+[external_dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+rfd = "0.14"
