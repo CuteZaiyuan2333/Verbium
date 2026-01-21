@@ -1,4 +1,4 @@
-project_dir = 'G:\Document-3\Project-Somnium'
-enabled_plugins = ["manager"]
+project_dir = 'G:\Document-3\verbium'
+enabled_plugins = ["agent", "code_editor", "manager", "terminal", "test_plugin"]
 build_and_run = true
 build_mode = "Release"

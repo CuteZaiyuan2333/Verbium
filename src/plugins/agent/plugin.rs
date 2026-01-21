@@ -70,7 +70,7 @@ impl Plugin for AgentPlugin {
     }
 
     fn on_tab_menu(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
-        if ui.button("🤖 Agent Tab").clicked() {
+        if ui.button("Agent Tab").clicked() {
             let modes = self.get_available_modes();
             // Use Box::new logic as before
             control.push(AppCommand::OpenTab(Tab::new(Box::new(AgentTab::new(modes)))));
