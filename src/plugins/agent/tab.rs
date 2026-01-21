@@ -64,7 +64,7 @@ impl TabInstance for AgentTab {
         // 1. Input Area (Bottom)
         let mut sent_text = None;
 
-        egui::TopBottomPanel::bottom("agent_modern_input")
+        egui::TopBottomPanel::bottom(ui.make_persistent_id("agent_modern_input"))
             .frame(egui::Frame::none().inner_margin(12.0))
             .show_inside(ui, |ui| {
                 // The "Card" container
