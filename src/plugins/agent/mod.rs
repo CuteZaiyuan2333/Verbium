@@ -69,7 +69,7 @@ impl AgentTab {
             input_text: String::new(),
             selected_mode,
             available_modes,
-            input_height: 80.0, // 初始高度
+            input_height: 80.0,
         }
     }
 
@@ -102,17 +102,21 @@ impl TabInstance for AgentTab {
     }
 
     fn ui(&mut self, ui: &mut Ui, _control: &mut Vec<AppCommand>) {
+        // Force spacing to 0 to control everything manually
+        ui.spacing_mut().item_spacing.y = 0.0;
+
         ui.vertical(|ui| {
-            // 1. Top Header
+            // 1. Header
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.add_space(4.0);
+                ui.add_space(8.0);
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
                 ui.painter().circle_filled(rect.center(), 5.0, egui::Color32::from_rgb(96, 165, 250));
+                ui.add_space(4.0);
                 ui.strong("AI Agent");
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(4.0);
+                    ui.add_space(8.0);
                     egui::ComboBox::from_id_salt("mode_select")
                         .selected_text(&self.selected_mode)
                         .show_ui(ui, |ui| {
@@ -126,47 +130,55 @@ impl TabInstance for AgentTab {
             ui.add_space(4.0);
             ui.separator();
 
-            // 2. Middle Chat Area (占据剩余空间减去底部输入框高度)
-            let spacing = ui.spacing().item_spacing.y;
-            let current_input_height = self.input_height.clamp(40.0, ui.available_height() * 0.7);
-            let chat_area_height = ui.available_height() - current_input_height - spacing * 2.0;
+            // Calculate heights
+            let total_h = ui.available_height();
+            let input_h = self.input_height.clamp(40.0, 300.0);
+            // 1(sep) + 4(space) + input_h + 4(space) + 1(safety)
+            let footer_needed_h = input_h + 10.0;
+            let chat_h = (total_h - footer_needed_h).max(0.0);
 
+            // 2. Middle Chat Area
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)
-                .max_height(chat_area_height)
+                .hscroll(false) // Strictly disable horizontal scroll
+                .max_height(chat_h)
                 .show(ui, |ui| {
-                    ui.add_space(8.0);
-                    for msg in &self.messages {
-                        let (align, fill_color, stroke_color, label_color) = match msg.role {
-                            MessageRole::User => (
-                                egui::Align::RIGHT,
-                                ui.visuals().selection.bg_fill.gamma_multiply(0.2),
-                                egui::Stroke::new(1.0, ui.visuals().selection.bg_fill.gamma_multiply(0.5)),
-                                ui.visuals().strong_text_color(),
-                            ),
-                            MessageRole::Agent => (
-                                egui::Align::LEFT,
-                                ui.visuals().widgets.active.bg_fill.gamma_multiply(0.1),
-                                egui::Stroke::new(1.0, ui.visuals().widgets.active.bg_fill.gamma_multiply(0.3)),
-                                ui.visuals().text_color(),
-                            ),
-                        };
-
-                        ui.with_layout(egui::Layout::top_down(align), |ui| {
-                            let max_width = ui.available_width() * 0.8;
-                            egui::Frame::none()
-                                .fill(fill_color)
-                                .stroke(stroke_color)
-                                .rounding(8.0)
-                                .inner_margin(10.0)
-                                .show(ui, |ui| {
-                                    ui.set_max_width(max_width);
-                                    ui.label(egui::RichText::new(&msg.content).color(label_color));
-                                });
-                        });
+                    ui.vertical(|ui| {
                         ui.add_space(8.0);
-                    }
+                        // inner width calculation inside scroll area
+                        let inner_w = ui.available_width() - 8.0; 
+                        for msg in &self.messages {
+                            let (align, fill_color, stroke_color, label_color) = match msg.role {
+                                MessageRole::User => (
+                                    egui::Align::RIGHT,
+                                    ui.visuals().selection.bg_fill.gamma_multiply(0.2),
+                                    egui::Stroke::new(1.0, ui.visuals().selection.bg_fill.gamma_multiply(0.5)),
+                                    ui.visuals().strong_text_color(),
+                                ),
+                                MessageRole::Agent => (
+                                    egui::Align::LEFT,
+                                    ui.visuals().widgets.active.bg_fill.gamma_multiply(0.1),
+                                    egui::Stroke::new(1.0, ui.visuals().widgets.active.bg_fill.gamma_multiply(0.3)),
+                                    ui.visuals().text_color(),
+                                ),
+                            };
+
+                            ui.with_layout(egui::Layout::top_down(align), |ui| {
+                                let max_bubble_w = inner_w * 0.85;
+                                egui::Frame::none()
+                                    .fill(fill_color)
+                                    .stroke(stroke_color)
+                                    .rounding(8.0)
+                                    .inner_margin(10.0)
+                                    .show(ui, |ui| {
+                                        ui.set_max_width(max_bubble_w);
+                                        ui.label(egui::RichText::new(&msg.content).color(label_color));
+                                    });
+                            });
+                            ui.add_space(8.0);
+                        }
+                    });
                 });
 
             // 3. Draggable Separator
@@ -174,6 +186,7 @@ impl TabInstance for AgentTab {
             let sep_response = ui.interact(sep_response.rect.expand(2.0), ui.id().with("h_sep"), egui::Sense::drag());
             if sep_response.dragged() {
                 self.input_height -= sep_response.drag_delta().y;
+                self.input_height = self.input_height.clamp(40.0, 300.0);
             }
             if sep_response.hovered() || sep_response.dragged() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
@@ -181,29 +194,41 @@ impl TabInstance for AgentTab {
 
             // 4. Bottom Input Area
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.add_space(4.0);
-                let btn_size = 36.0;
-                let spacing_x = ui.spacing().item_spacing.x;
-                let text_edit_width = ui.available_width() - btn_size - spacing_x - 4.0;
-                let text_edit_height = self.input_height.clamp(40.0, 300.0);
+            let available_w = ui.available_width();
+            ui.allocate_ui_with_layout(
+                egui::vec2(available_w, input_h),
+                egui::Layout::left_to_right(egui::Align::TOP),
+                |ui| {
+                    ui.add_space(8.0); // Left margin
+                    let btn_size = 32.0;
+                    let spacing_x = ui.spacing().item_spacing.x;
+                    // Width = total - left(8) - right(8) - button(32) - spacing - safety(2)
+                    let text_edit_w = (available_w - 16.0 - btn_size - spacing_x - 2.0).max(0.0);
 
-                let text_edit = egui::TextEdit::multiline(&mut self.input_text)
-                    .hint_text("Type a message...")
-                    .desired_rows(1)
-                    .lock_focus(true);
-                
-                let output = ui.add_sized([text_edit_width, text_edit_height], text_edit);
-                
-                // 正方形图标按钮
-                let send_btn = egui::Button::new("🚀").min_size(egui::vec2(btn_size, btn_size));
-                if ui.add(send_btn).clicked() 
-                   || (output.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift)) {
-                    self.send_message();
-                    output.request_focus();
+                    egui::ScrollArea::vertical()
+                        .id_salt("input_scroll")
+                        .max_height(input_h)
+                        .show(ui, |ui| {
+                            ui.add_sized(
+                                [text_edit_w, input_h],
+                                egui::TextEdit::multiline(&mut self.input_text)
+                                    .hint_text("Type a message...")
+                                    .desired_width(text_edit_w)
+                                    .lock_focus(true)
+                            )
+                        });
+
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                        ui.add_space((input_h - btn_size) / 2.0);
+                        let send_btn = egui::Button::new("🚀").min_size(egui::vec2(btn_size, btn_size));
+                        if ui.add(send_btn).clicked() 
+                           || (ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift)) {
+                            self.send_message();
+                        }
+                    });
+                    ui.add_space(8.0); // Right margin
                 }
-                ui.add_space(4.0);
-            });
+            );
             ui.add_space(4.0);
         });
     }
