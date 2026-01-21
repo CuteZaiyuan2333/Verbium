@@ -98,7 +98,7 @@ impl AgentTab {
 
 impl TabInstance for AgentTab {
     fn title(&self) -> WidgetText {
-        "🤖 Agent".into()
+        "Agent".into()
     }
 
     fn ui(&mut self, ui: &mut Ui, _control: &mut Vec<AppCommand>) {
@@ -309,7 +309,7 @@ impl Plugin for AgentPlugin {
     }
 
     fn on_tab_menu(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
-        if ui.button("🤖 Agent Tab").clicked() {
+        if ui.button("Agent Tab").clicked() {
             let modes = self.get_available_modes();
             control.push(AppCommand::OpenTab(Tab::new(Box::new(AgentTab::new(modes)))));
             ui.close_menu();
