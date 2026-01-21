@@ -1,58 +1,58 @@
-# Agent Tab 插件设计文档
+# Agent Tab Plugin Design Document
 
-本文档记录了 Verbium Agent 插件的设计思路、架构规划及开发进度。
+This document records the design philosophy, architectural planning, and development progress of the Verbium Agent plugin.
 
-## 1. 核心愿景 (Vision)
-构建一个“UI 与逻辑分离”的智能体运行时。Rust 负责高性能的 UI 渲染和系统底层接口暴露，而具体的 Agent 行为、模式切换和工具调用逻辑则通过 **Rhai** 脚本动态实现。
+## 1. Core Vision
+To build an intelligent agent runtime with "separation of UI and logic." Rust handles high-performance UI rendering and exposes low-level system interfaces, while specific Agent behaviors, mode switching, and tool calling logic are dynamically implemented via **Rhai** scripts.
 
-## 2. 设计原则 (Design Principles)
-- **脚本驱动**：Agent 的“大脑”位于外部 Rhai 脚本中，用户可自由修改而无需重新编译。
-- **配置灵活**：用户可以自定义脚本根目录，支持多种工作模式（对话/开发/Solo等）。
-- **插件解耦**：Agent 插件仅作为 egui 的对话外壳，不硬编码任何具体的 AI 逻辑。
+## 2. Design Principles
+- **Script-Driven**: The Agent's "brain" resides in external Rhai scripts, allowing users to modify logic without recompilation.
+- **Flexible Configuration**: Users can customize the script root directory, supporting multiple working modes (Chat/Dev/Solo, etc.).
+- **Plugin Decoupling**: The Agent plugin serves only as an egui chat shell and does not hard-code any specific AI logic.
 
-## 3. 架构规划 (Architecture)
+## 3. Architecture Planning
 
-### 3.1 Rust 宿主层 (The Shell)
-- **职责**：
-    - 管理 Rhai 引擎生命周期。
-    - 持久化用户设置（脚本目录、API 配置）。
-    - 渲染聊天界面。
-    - 建立 Rust 与 Rhai 之间的 Bridge，将 `AppCommand` 暴露给脚本。
-- **位置**：`src/plugins/agent/`
+### 3.1 Rust Host Layer (The Shell)
+- **Responsibilities**:
+    - Managing the Rhai engine lifecycle.
+    - Persisting user settings (script directory, API configurations).
+    - Rendering the chat interface.
+    - Establishing a Bridge between Rust and Rhai, exposing `AppCommand` to scripts.
+- **Location**: `src/plugins/agent/`
 
-### 3.2 Rhai 脚本层 (The Logic)
-- **职责**：
-    - 定义 Prompt 策略。
-    - 调用 LLM API。
-    - 处理上下文感知（读取代码、分析报错）。
-    - 决策何时调用编辑器工具。
-- **位置**：用户自定义目录下的 `.rhai` 文件。
+### 3.2 Rhai Script Layer (The Logic)
+- **Responsibilities**:
+    - Defining Prompt strategies.
+    - Calling LLM APIs.
+    - Handling context awareness (reading code, analyzing errors).
+    - Deciding when to invoke editor tools.
+- **Location**: `.rhai` files under the user-defined directory.
 
-### 3.3 交互流程
-1. 用户输入消息。
-2. Rust 收集当前环境上下文。
-3. 加载选定的 Rhai 脚本并运行 `main` 函数。
-4. 脚本执行逻辑并返回响应。
-5. UI 显示结果。
+### 3.3 Interaction Flow
+1. User enters a message.
+2. Rust collects the current environment context.
+3. The selected Rhai script is loaded, and the `main` function is executed.
+4. The script executes logic and returns a response.
+5. The UI displays the results.
 
-## 4. 开发计划 (Roadmap)
+## 4. Roadmap
 
-### Phase 1: 基础设施 (当前阶段)
-- [ ] 创建插件外壳。
-- [ ] 实现设置界面，支持用户指定脚本目录。
-- [ ] 实现占位 Tab UI 并注册到菜单栏。
+### Phase 1: Infrastructure (Current Phase)
+- [ ] Create the plugin shell.
+- [ ] Implement the settings interface, allowing users to specify the script directory.
+- [ ] Implement placeholder Tab UI and register it to the menu bar.
 
-### Phase 2: Rhai 集成
-- [ ] 引入 `rhai` 依赖。
-- [ ] 实现脚本目录的自动扫描与模式切换菜单。
-- [ ] 建立基础的 Bridge 函数（如 `print`, `get_active_file`）。
+### Phase 2: Rhai Integration
+- [ ] Introduce the `rhai` dependency.
+- [ ] Implement automatic script directory scanning and a mode-switching menu.
+- [ ] Establish basic Bridge functions (e.g., `print`, `get_active_file`).
 
-### Phase 3: 对话能力
-- [ ] 实现聊天界面 UI（消息气泡、滚动区域）。
-- [ ] 集成 `reqwest` 供脚本调用 AI 接口。
-- [ ] 支持异步处理，避免请求阻塞 UI。
+### Phase 3: Conversational Capability
+- [ ] Implement the chat interface UI (message bubbles, scroll areas).
+- [ ] Integrate `reqwest` for scripts to call AI APIs.
+- [ ] Support asynchronous processing to avoid blocking the UI during requests.
 
-### Phase 4: 深度集成
-- [ ] 暴露 `AppCommand` 到 Rhai。
-- [ ] 实现 Agent 自动修改代码、打开文件等功能。
-- [ ] 完善错误处理与日志查看器。
+### Phase 4: Deep Integration
+- [ ] Expose `AppCommand` to Rhai.
+- [ ] Enable the Agent to automatically modify code, open files, etc.
+- [ ] Refine error handling and the log viewer.

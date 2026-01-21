@@ -1,68 +1,68 @@
-# Verbium 系统架构设计
+# Verbium System Architecture Design
 
-本文档详细描述了 Verbium 编辑器框架的核心架构原则、模块划分及通信机制。
+This document describes the core architectural principles, module divisions, and communication mechanisms of the Verbium editor framework.
 
-## 1. 核心设计原则
+## 1. Core Design Principles
 
-### 1.1 静态插件架构 (Static Plugin Architecture)
-与常见的动态链接库 (DLL/so) 或 WASM 插件系统不同，Verbium 选择将插件**静态编译**到最终的可执行文件中。
-- **优点**：
-    - **性能**：零运行时开销，享受全程序优化 (LTO)。
-    - **安全**：利用 Rust 的编译期类型检查，避免 ABI 兼容性问题。
-    - **简单**：无需复杂的动态加载器或沙盒环境。
-- **缺点**：添加/移除插件需要重新编译（由 Launcher 自动化处理）。
+### 1.1 Static Plugin Architecture
+Unlike common Dynamic Link Library (DLL/so) or WASM plugin systems, Verbium chooses to **statically compile** plugins into the final executable.
+- **Advantages**:
+    - **Performance**: Zero runtime overhead, enjoying Link-Time Optimization (LTO).
+    - **Security**: Leverages Rust's compile-time type checking to avoid ABI compatibility issues.
+    - **Simplicity**: No need for complex dynamic loaders or sandboxing environments.
+- **Disadvantages**: Adding/removing plugins requires recompilation (automated by the Launcher).
 
-### 1.2 响应式注入 (Reactive Injection)
-主程序 (Host) 不持有特定插件的引用，而是定义了一系列**挂载点 (Hooks)**。在渲染每一帧时，主程序会遍历所有已注册的插件，调用其对应的方法，允许插件将自己的 UI “画”到指定位置。
+### 1.2 Reactive Injection
+The Host program does not hold references to specific plugins. Instead, it defines a series of **Hooks**. During the rendering of each frame, the Host iterates through all registered plugins and calls their corresponding methods, allowing plugins to "paint" their UI into designated locations.
 
-## 2. 系统模块
+## 2. System Modules
 
-### 2.1 核心层 (Core / Kernel)
-位于 `src/lib.rs` 和 `src/app.rs`。
-- **职责**：
-    - 管理窗口生命周期 (`eframe`).
-    - 管理 Docking 布局 (`egui_dock`).
-    - 维护插件列表与加载顺序 (`src/plugins/mod.rs` 拓扑排序).
-    - 消息分发 (Command Dispatch).
-- **特点**：不知道具体业务逻辑，只负责调度。
+### 2.1 Core Layer (Kernel)
+Located in `src/lib.rs` and `src/app.rs`.
+- **Responsibilities**:
+    - Managing window lifecycle (`eframe`).
+    - Managing docking layouts (`egui_dock`).
+    - Maintaining the plugin list and loading order (topological sorting in `src/plugins/mod.rs`).
+    - Message distribution (Command Dispatch).
+- **Characteristics**: Agnostic of specific business logic, responsible only for scheduling.
 
-### 2.2 插件层 (Plugins)
-位于 `src/plugins/`。每个子目录为一个独立插件。
-- **Core Plugin**：提供基础功能（退出、布局重置、关于页面）。
-- **User Plugins**：实现具体业务（如 Code Editor, File Manager）。
+### 2.2 Plugin Layer
+Located in `src/plugins/`. Each subdirectory is an independent plugin.
+- **Core Plugin**: Provides basic functions (Exit, Layout Reset, About page).
+- **User Plugins**: Implement specific business logic (e.g., Code Editor, File Manager).
 
 ### 2.3 Launcher (External & Integrated)
-- **External Launcher**：用户首先从 Release 下载预编译的二进制文件。它是项目的入口点，负责引导用户配置项目路径、勾选插件并执行初始编译。
-- **Integrated Manager**：编译完成后，功能完整的编辑器内部依然包含 `manager` 插件，其逻辑与外部启动器一致，允许在开发过程中持续迭代构建。
-- **自举原理**：通过外部启动器“激活”源码仓库，根据配置同步 `Cargo.toml` 依赖与 Features，最终生成定制化的编辑器可执行文件。
+- **External Launcher**: Users first download the pre-compiled binary from Releases. It is the entry point for the project, guiding users to configure project paths, select plugins, and perform the initial compilation.
+- **Integrated Manager**: After compilation, the full-featured editor still contains the `manager` plugin. Its logic is consistent with the external launcher, allowing for continuous iterative builds during development.
+- **Self-Bootstrapping Principle**: The external launcher "activates" the source code repository, synchronizes `Cargo.toml` dependencies and features based on configuration, and finally generates a customized editor executable.
 
-## 3. 通信与交互机制
+## 3. Communication & Interaction Mechanism
 
-为了保持插件解耦，Verbium 采用了基于消息队列的中介者模式。
+To maintain plugin decoupling, Verbium adopts a Mediator pattern based on a message queue.
 
-### 3.1 AppCommand 协议
-所有状态变更必须通过 `AppCommand` 枚举发送到命令队列，由主程序在帧末统一处理。
+### 3.1 AppCommand Protocol
+All state changes must be sent to the command queue via the `AppCommand` enum, processed uniformly by the Host at the end of each frame.
 
 ```rust
 pub enum AppCommand {
-    OpenTab(Tab),            // 直接打开一个 Tab 实例
-    CloseTab(String),        // 根据标题关闭 Tab
-    TileAll,                 // 平铺布局
-    ResetLayout,             // 重置布局
-    OpenFile(PathBuf),       // 请求打开文件
-    RevealInShell(PathBuf),  // 在系统文件管理器中定位
-    CopyToClipboard(String), // 写入剪贴板
-    Notify { message: String, level: NotificationLevel }, // 全局通知
-    ToggleSettings,          // 打开设置面板
+    OpenTab(Tab),            // Directly open a Tab instance
+    CloseTab(String),        // Close a Tab by title
+    TileAll,                 // Tile layout
+    ResetLayout,             // Reset layout
+    OpenFile(PathBuf),       // Request to open a file
+    RevealInShell(PathBuf),  // Locate in the system file manager
+    CopyToClipboard(String), // Write to clipboard
+    Notify { message: String, level: NotificationLevel }, // Global notification
+    ToggleSettings,          // Open settings panel
 }
 ```
 
-### 3.2 异步 I/O 与反馈模式
-为保证 UI 流畅，插件处理耗时操作（如读取大文件）应遵循以下规范：
-1. **异步执行**：通过 `std::thread::spawn` 或异步 Runtime 执行 I/O。
-2. **状态流转**：UI 层面应实现 `Loading` 占位状态并显示 Spinner。
-3. **全局通知**：操作结果（保存成功、删除失败等）必须通过 `AppCommand::Notify` 进行反馈。
+### 3.2 Async I/O & Feedback Pattern
+To ensure UI smoothness, plugins handling time-consuming operations (e.g., reading large files) should follow these specifications:
+1. **Asynchronous Execution**: Perform I/O via `std::thread::spawn` or an async runtime.
+2. **State Transition**: The UI should implement a `Loading` placeholder state and display a spinner.
+3. **Global Notification**: Operation results (save successful, delete failed, etc.) must be reported via `AppCommand::Notify`.
 
-## 4. 插件规范
-- **元数据绑定**：插件 `name()` 必须引用 `generated.rs` 中自动生成的常量，禁止硬编码。
-- **系统隔离**：严禁在插件内直接调用平台特定代码（如 `explorer`），必须通过 `AppCommand` 委托宿主执行。
+## 4. Plugin Specifications
+- **Metadata Binding**: The plugin `name()` must reference constants automatically generated in `generated.rs`, avoiding hard-coding.
+- **System Isolation**: Direct calls to platform-specific code (e.g., `explorer`) within plugins are strictly prohibited; they must be delegated to the Host via `AppCommand`.

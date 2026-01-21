@@ -1,63 +1,63 @@
-# Verbium Launcher 设计规范
+# Verbium Launcher Design Specification
 
-Launcher 是 Verbium 生态系统的重要组成部分，负责管理静态插件的编译配置。
+The Launcher is a crucial component of the Verbium ecosystem, responsible for managing the compilation configuration of static plugins.
 
-## 1. 核心职责
+## 1. Core Responsibilities
 
-为了兼顾性能与灵活性，Verbium 采用 **自举 (Self-Bootstrapping)** 架构。传统的独立启动器已被废弃，取而代之的是内置的 `manager` 插件（亦称为集成启动器）。
+To balance performance and flexibility, Verbium adopts a **Self-Bootstrapping** architecture. Traditional standalone launchers have been deprecated in favor of the built-in `manager` plugin (also known as the integrated launcher).
 
-1.  **扫描**：遍历 `src/plugins/` 目录，通过识别 `plugin.toml` 发现可用插件。
-2.  **配置生成**：主程序的 `build.rs` 自动读取 `plugin.toml` 并生成 `src/plugins/generated.rs`。
-    - **模块定义**：自动生成的 `pub mod <name>;`。
-    - **常量绑定**：生成 `PLUGIN_NAME_<ID>` 常量，用于编译期标识对齐。
-    - **静态注册**：生成 `get_extra_plugins` 函数，实现插件的自动实例化。
-3.  **依赖与特征注入**：`manager` 插件直接修改根目录 `Cargo.toml`：
-    - **外部依赖**：将 `[external_dependencies]` 注入到 `# --- BEGIN PLUGIN DEPENDENCIES ---` 标记区。
-    - **Features 同步**：自动生成 `plugin_<name>` 特征，并根据用户勾选状态更新 `default` 特征列表。
-4.  **构建环境管理**：利用 `cargo` 命令流实现编译、清理、运行及特定版本的导出。
+1.  **Scanning**: Iterates through the `src/plugins/` directory to discover available plugins by identifying `plugin.toml`.
+2.  **Code Generation**: The main program's `build.rs` automatically reads `plugin.toml` and generates `src/plugins/generated.rs`.
+    - **Module Definitions**: Automatically generates `pub mod <name>;`.
+    - **Constant Binding**: Generates `PLUGIN_NAME_<ID>` constants for compile-time identification alignment.
+    - **Static Registration**: Generates the `get_extra_plugins` function for automatic plugin instantiation.
+3.  **Dependency & Feature Injection**: The `manager` plugin directly modifies the root `Cargo.toml`:
+    - **External Dependencies**: Injects `[external_dependencies]` into the `# --- BEGIN PLUGIN DEPENDENCIES ---` marker block.
+    - **Feature Synchronization**: Automatically generates `plugin_<name>` features and updates the `default` feature list based on user selections.
+4.  **Build Environment Management**: Uses `cargo` commands to implement compilation, cleanup, execution, and exporting of specific versions.
 
-## 2. 插件发现协议
+## 2. Plugin Discovery Protocol
 
-插件必须定义在 `src/plugins/` 的子目录下，并包含一个规范的 `plugin.toml`。
+Plugins must be defined in subdirectories of `src/plugins/` and include a standard `plugin.toml`.
 
-### plugin.toml 格式定义
+### plugin.toml Format Definition
 ```toml
 [plugin]
-name = "my_plugin"           # 唯一标识符（必须是合法的 Rust 模块名）
-display_name = "我的插件"    # 显示在 Launcher 列表中的友好名称
-version = "0.1.0"            # 插件版本
-author = "Your Name"         # 作者信息
-description = "插件功能描述"  # 插件简述
-dependencies = ["core"]      # 内部插件依赖顺序（用于拓扑排序）
+name = "my_plugin"           # Unique identifier (must be a valid Rust module name)
+display_name = "My Plugin"   # Friendly name shown in the Launcher list
+version = "0.1.0"            # Plugin version
+author = "Your Name"         # Author info
+description = "Description"  # Short description of the plugin
+dependencies = ["core"]      # Internal plugin dependency order (for topological sorting)
 
 [external_dependencies]
-# 将会被自动注入到根 Cargo.toml 的 [dependencies] 中
+# Will be automatically injected into the root Cargo.toml [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 rand = "0.8"
 ```
 
-## 3. 配置文件同步逻辑
+## 3. Configuration Synchronization Logic
 
-为了避免手动修改 `Cargo.toml` 导致冲突，`manager` 插件拥有其特定区域的管理权：
+To avoid conflicts caused by manual modification of `Cargo.toml`, the `manager` plugin manages specific regions:
 
-- **依赖注入点**：
+- **Dependency Injection Point**:
   ```toml
   # --- BEGIN PLUGIN DEPENDENCIES ---
-  # ... 自动生成：From <plugin_a> & <plugin_b> ...
-  # ... 重复项将自动合并 ...
+  # ... Automatically generated: From <plugin_a> & <plugin_b> ...
+  # ... Duplicates will be automatically merged ...
   # --- END PLUGIN DEPENDENCIES ---
   ```
-- **特征同步**：`manager` 会自动在 `[features]` 节下维护 `plugin_*` 列表，并根据启用状态重写 `default = [...]`。
+- **Feature Synchronization**: The `manager` automatically maintains the `plugin_*` list under the `[features]` section and rewrites `default = [...]` based on the enabled state.
 
-## 4. 元数据共享与校验
+## 4. Metadata Sharing & Validation
 
-- **编译期常量**：插件实现 `name()` 方法时，**必须**引用 `crate::plugins::PLUGIN_NAME_...`。
-- **一致性校验**：`generated.rs` 在实例化时会通过 `assert_eq!(p.name(), CONST_NAME)` 强制验证 Rust 实现中的名称与 `plugin.toml` 配置是否一致，防止配置漂移。
+- **Compile-Time Constants**: When implementing the `name()` method, plugins **must** reference `crate::plugins::PLUGIN_NAME_...`.
+- **Consistency Check**: During instantiation, `generated.rs` enforces validation via `assert_eq!(p.name(), CONST_NAME)` to ensure the name in the Rust implementation matches the `plugin.toml` configuration, preventing configuration drift.
 
-## 5. UI 交互流 (Integrated Launcher)
+## 5. UI Interaction Flow (Integrated Launcher)
 
-1.  **环境检查**：启动时检测 `launcher_config.toml`，自动加载项目路径及上次启用的插件状态。
-2.  **插件列表**：中心面板显示所有扫描到的插件，点击复选框可实时更改待编译功能。
-3.  **配置面板**：底部支持选择构建模式（Debug/Release）、勾选 "Compile & Start" 联动开关。
-4.  **控制台交互**：所有 `cargo` 输出（stdout/stderr）会被重定向到右侧的 Console 面板，支持滚动追踪。
-5.  **一键同步与运行**：点击 "▶ Build & Run" 后，系统按顺序执行：同步 `Cargo.toml` -> 调用 `cargo run` -> 进程自杀（或由 Cargo 接管新窗口）。
+1.  **Environment Check**: Detects `launcher_config.toml` at startup, automatically loading the project path and the last enabled plugin state.
+2.  **Plugin List**: The central panel displays all scanned plugins; clicking a checkbox updates the features to be compiled in real-time.
+3.  **Configuration Panel**: The bottom section supports selecting the build mode (Debug/Release) and toggling the "Compile & Start" linked switch.
+4.  **Console Interaction**: All `cargo` output (stdout/stderr) is redirected to the Console panel on the right, supporting scroll tracking.
+5.  **One-Click Sync & Run**: Clicking "▶ Build & Run" triggers the following sequence: Synchronize `Cargo.toml` -> Invoke `cargo run` -> Current process exits (or Cargo takes over the new window).
