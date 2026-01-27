@@ -13,12 +13,14 @@ egui_dock = "0.14.0"
 anyhow = "1.0"
 # From agent
 chrono = { features = ["serde"], version = "0.4" }
-# From code_editor
-egui_extras = { features = ["syntect"], version = "0.29.1" }
+# From browser & code_editor
+egui_extras = { version = "0.29.1" }
 # From terminal
 parking_lot = "0.12"
 # From terminal
 portable-pty = "0.8"
+# From browser
+raw-window-handle = "0.6.2"
 # From agent & code_editor & file_manager & manager
 rfd = "0.14"
 # From agent & manager
@@ -33,13 +35,18 @@ unicode-width = "0.1"
 vte = "0.11"
 # From file_manager & manager
 walkdir = "2.5"
+# From browser
+winapi = { features = ["winuser"], version = "0.3.9" }
+# From browser
+wry = "0.54.1"
 # From manager
 zip = "0.6"
 # --- END PLUGIN DEPENDENCIES ---
 
 [features]
-default = ["plugin_agent", "plugin_code_editor", "plugin_file_manager", "plugin_manager", "plugin_terminal", "plugin_test_plugin"]
+default = ["plugin_agent", "plugin_browser", "plugin_code_editor", "plugin_file_manager", "plugin_manager", "plugin_terminal", "plugin_test_plugin"]
 plugin_agent = []
+plugin_browser = []
 plugin_code_editor = []
 plugin_file_manager = []
 plugin_manager = []

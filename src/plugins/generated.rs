@@ -3,6 +3,9 @@
 #[cfg(feature = "plugin_agent")]
 pub mod agent;
 
+#[cfg(feature = "plugin_browser")]
+pub mod browser;
+
 #[cfg(feature = "plugin_code_editor")]
 pub mod code_editor;
 
@@ -22,6 +25,8 @@ pub mod test_plugin;
 // Plugin Name Constants
 #[cfg(feature = "plugin_agent")]
 pub const PLUGIN_NAME_AGENT: &str = "agent";
+#[cfg(feature = "plugin_browser")]
+pub const PLUGIN_NAME_BROWSER: &str = "browser";
 #[cfg(feature = "plugin_code_editor")]
 pub const PLUGIN_NAME_CODE_EDITOR: &str = "code_editor";
 #[cfg(feature = "plugin_file_manager")]
@@ -39,6 +44,12 @@ pub fn get_extra_plugins() -> Vec<Box<dyn crate::Plugin>> {
         {
             let p = Box::new(agent::create());
             assert_eq!(p.name(), PLUGIN_NAME_AGENT, "Plugin name mismatch for agent");
+            plugins.push(p);
+        }
+        #[cfg(feature = "plugin_browser")]
+        {
+            let p = Box::new(browser::create());
+            assert_eq!(p.name(), PLUGIN_NAME_BROWSER, "Plugin name mismatch for browser");
             plugins.push(p);
         }
         #[cfg(feature = "plugin_code_editor")]
