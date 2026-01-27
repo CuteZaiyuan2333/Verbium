@@ -1,5 +1,5 @@
 use std::num::NonZeroIsize;
-use wry::WebView;
+use wry::{WebView, NewWindowFeatures, NewWindowResponse};
 use raw_window_handle::{HasWindowHandle, WindowHandle, RawWindowHandle, Win32WindowHandle, HandleError};
 
 #[cfg(target_os = "windows")]
@@ -25,16 +25,23 @@ impl HasWindowHandle for WindowWrapper {
     }
 }
 
-pub fn create_webview(url: &str) -> Option<WebView> {
+pub fn create_webview(
+    url: &str, 
+    new_window_handler: Option<Box<dyn Fn(String, NewWindowFeatures) -> NewWindowResponse + Send + Sync + 'static>>
+) -> Option<WebView> {
     #[cfg(target_os = "windows")]
     {
         let hwnd = find_my_hwnd()?;
         let wrapper = WindowWrapper(hwnd);
         
-        wry::WebViewBuilder::new()
-            .with_url(url)
-            .build_as_child(&wrapper)
-            .ok()
+        let mut builder = wry::WebViewBuilder::new()
+            .with_url(url);
+
+        if let Some(handler) = new_window_handler {
+            builder = builder.with_new_window_req_handler(handler);
+        }
+
+        builder.build_as_child(&wrapper).ok()
     }
     #[cfg(not(target_os = "windows"))]
     {

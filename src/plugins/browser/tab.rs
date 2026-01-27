@@ -1,12 +1,12 @@
 use std::sync::Arc;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use parking_lot::Mutex;
 use eframe::egui;
-use crate::{TabInstance, AppCommand};
+use crate::{TabInstance, AppCommand, Tab};
 use super::widgets::NavButton;
 use super::webview::{create_webview, steal_focus_from_webview};
 
 /// Wrapper to make WebView Send + Sync
-/// In Windows, WebView2 is thread-safe for the same thread or with proper synchronization.
 pub struct SafeWebView(pub wry::WebView);
 unsafe impl Send for SafeWebView {}
 unsafe impl Sync for SafeWebView {}
@@ -17,6 +17,8 @@ pub struct BrowserTab {
     webview: Arc<Mutex<Option<SafeWebView>>>,
     last_rect: Arc<Mutex<egui::Rect>>,
     last_ppp: Arc<Mutex<f32>>,
+    // Channel to handle new window requests from the webview thread
+    new_tab_channel: (Arc<Sender<String>>, Arc<Mutex<Receiver<String>>>),
 }
 
 impl std::fmt::Debug for BrowserTab {
@@ -27,11 +29,13 @@ impl std::fmt::Debug for BrowserTab {
 
 impl BrowserTab {
     pub fn new(url: String) -> Self {
+        let (tx, rx) = channel();
         Self {
             url,
             webview: Arc::new(Mutex::new(None)),
             last_rect: Arc::new(Mutex::new(egui::Rect::NOTHING)),
             last_ppp: Arc::new(Mutex::new(0.0)),
+            new_tab_channel: (Arc::new(tx), Arc::new(Mutex::new(rx))),
         }
     }
 }
@@ -41,7 +45,13 @@ impl TabInstance for BrowserTab {
         "Browser".into()
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _control: &mut Vec<AppCommand>) {
+    fn ui(&mut self, ui: &mut egui::Ui, control: &mut Vec<AppCommand>) {
+        // 0. Handle new tab requests from our channel
+        while let Ok(new_url) = self.new_tab_channel.1.lock().try_recv() {
+            let new_tab = BrowserTab::new(new_url);
+            control.push(AppCommand::OpenTab(Tab::new(Box::new(new_tab))));
+        }
+
         // 1. Top Bar
         ui.horizontal(|ui| {
             if ui.add(NavButton::new("⬅")).clicked() {
@@ -109,7 +119,13 @@ impl TabInstance for BrowserTab {
 
                 let mut webview_lock = self.webview.lock();
                 if webview_lock.is_none() {
-                    if let Some(webview) = create_webview(&self.url) {
+                    let tx = self.new_tab_channel.0.clone();
+                    let handler = Box::new(move |url: String, _| {
+                        let _ = tx.send(url);
+                        wry::NewWindowResponse::Deny
+                    });
+
+                    if let Some(webview) = create_webview(&self.url, Some(handler)) {
                         *webview_lock = Some(SafeWebView(webview));
                     }
                 }
@@ -122,7 +138,6 @@ impl TabInstance for BrowserTab {
                         *last_rect = rect;
                         *last_ppp = ppp;
 
-                        // Convert to physical pixels
                         let physical_rect = egui::Rect::from_min_max(
                             egui::pos2(rect.min.x * ppp, rect.min.y * ppp),
                             egui::pos2(rect.max.x * ppp, rect.max.y * ppp),
