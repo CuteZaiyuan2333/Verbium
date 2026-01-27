@@ -1,8 +1,8 @@
 use std::sync::Arc;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::Sender;
 use parking_lot::Mutex;
 use eframe::egui;
-use crate::{TabInstance, AppCommand, Tab};
+use crate::{TabInstance, AppCommand};
 use super::widgets::NavButton;
 use super::webview::{create_webview, steal_focus_from_webview};
 
@@ -17,8 +17,7 @@ pub struct BrowserTab {
     webview: Arc<Mutex<Option<SafeWebView>>>,
     last_rect: Arc<Mutex<egui::Rect>>,
     last_ppp: Arc<Mutex<f32>>,
-    // Channel to handle new window requests from the webview thread
-    new_tab_channel: (Arc<Sender<String>>, Arc<Mutex<Receiver<String>>>),
+    new_tab_tx: Arc<Sender<String>>,
 }
 
 impl std::fmt::Debug for BrowserTab {
@@ -28,14 +27,13 @@ impl std::fmt::Debug for BrowserTab {
 }
 
 impl BrowserTab {
-    pub fn new(url: String) -> Self {
-        let (tx, rx) = channel();
+    pub fn new(url: String, new_tab_tx: Arc<Sender<String>>) -> Self {
         Self {
             url,
             webview: Arc::new(Mutex::new(None)),
             last_rect: Arc::new(Mutex::new(egui::Rect::NOTHING)),
             last_ppp: Arc::new(Mutex::new(0.0)),
-            new_tab_channel: (Arc::new(tx), Arc::new(Mutex::new(rx))),
+            new_tab_tx,
         }
     }
 }
@@ -45,13 +43,9 @@ impl TabInstance for BrowserTab {
         "Browser".into()
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, control: &mut Vec<AppCommand>) {
-        // 0. Handle new tab requests from our channel
-        while let Ok(new_url) = self.new_tab_channel.1.lock().try_recv() {
-            let new_tab = BrowserTab::new(new_url);
-            control.push(AppCommand::OpenTab(Tab::new(Box::new(new_tab))));
-        }
-
+    fn ui(&mut self, ui: &mut egui::Ui, _control: &mut Vec<AppCommand>) {
+        let ctx = ui.ctx().clone();
+        
         // 1. Top Bar
         ui.horizontal(|ui| {
             if ui.add(NavButton::new("⬅")).clicked() {
@@ -119,9 +113,12 @@ impl TabInstance for BrowserTab {
 
                 let mut webview_lock = self.webview.lock();
                 if webview_lock.is_none() {
-                    let tx = self.new_tab_channel.0.clone();
+                    let tx = self.new_tab_tx.clone();
+                    let ctx_clone = ctx.clone();
+                    
                     let handler = Box::new(move |url: String, _| {
                         let _ = tx.send(url);
+                        ctx_clone.request_repaint(); // 立即通知主线程创建标签页
                         wry::NewWindowResponse::Deny
                     });
 
@@ -159,7 +156,10 @@ impl TabInstance for BrowserTab {
                 }
 
                 ui.centered_and_justified(|ui| {
-                    ui.heading("Loading WebView...");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Spinner::new());
+                        ui.heading(" Loading WebView...");
+                    });
                 });
         });
     }
