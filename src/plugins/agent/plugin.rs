@@ -48,6 +48,31 @@ impl AgentPlugin {
              self.show_session_creator = false;
         }
     }
+
+    fn get_available_sessions(&self) -> Vec<PathBuf> {
+        let mut sessions = Vec::new();
+        let folder = self.config.default_chat_dir.clone().unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_default()
+        });
+
+        if let Ok(entries) = std::fs::read_dir(folder) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("toml") {
+                    // Check if it's not a config file (simple heuristic: if it contains session data)
+                    // For now, let's just include all .toml except known configs
+                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                        if filename != "agent_config.toml" && filename != "launcher_config.toml" {
+                            sessions.push(path);
+                        }
+                    }
+                }
+            }
+        }
+        sessions.sort_by(|a, b| b.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .cmp(&a.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH)));
+        sessions
+    }
 }
 
 impl Plugin for AgentPlugin {
@@ -111,50 +136,77 @@ impl Plugin for AgentPlugin {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ctx, |ui| {
-                    ui.set_min_width(300.0);
+                    ui.set_min_width(400.0);
+                    ui.set_max_height(500.0);
                     
-                    ui.heading("Start a Conversation");
+                    ui.heading("Agent Sessions");
                     ui.add_space(8.0);
 
-                    // Tabs (simulated with radio buttons or horizontal layout for now)
-                    ui.horizontal(|ui| {
-                        ui.label("Name:");
-                        ui.text_edit_singleline(&mut self.new_session_name);
+                    // 1. New Session Area
+                    ui.group(|ui| {
+                        ui.label(egui::RichText::new("Create New Session").strong());
+                        ui.horizontal(|ui| {
+                            ui.label("Name:");
+                            ui.text_edit_singleline(&mut self.new_session_name);
+                            if ui.button("🚀 Create").clicked() {
+                                let folder = self.config.default_chat_dir.clone().unwrap_or_else(|| {
+                                    std::env::current_dir().unwrap_or_default()
+                                });
+                                
+                                let safe_name = self.new_session_name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "_");
+                                let filename = format!("{}.toml", safe_name);
+                                let full_path = folder.join(filename);
+
+                                let mode = self.get_available_modes().get(0).cloned().unwrap_or("Chat".into());
+                                let mut session = ChatSession::new(mode, "Gemini Pro".into());
+                                session.path = Some(full_path.clone());
+
+                                if let Err(e) = session.save() {
+                                     control.push(AppCommand::Notify { 
+                                         message: format!("Failed to create session: {}", e), 
+                                         level: crate::NotificationLevel::Error 
+                                     });
+                                } else {
+                                    self.create_and_open_session(full_path, control);
+                                }
+                            }
+                        });
                     });
 
-                    ui.add_space(8.0);
+                    ui.add_space(12.0);
+
+                    // 2. Existing Sessions List
+                    ui.label(egui::RichText::new("Open Existing Session").strong());
+                    ui.add_space(4.0);
                     
-                    if ui.button("Create New Session").clicked() {
-                        // 1. Determine Path
-                        let folder = self.config.default_chat_dir.clone().unwrap_or_else(|| {
-                            std::env::current_dir().unwrap_or_default()
+                    let sessions = self.get_available_sessions();
+                    if sessions.is_empty() {
+                        ui.weak("No sessions found in storage directory.");
+                    } else {
+                        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                            for path in sessions {
+                                let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
+                                let date_str = path.metadata().and_then(|m| m.modified()).ok()
+                                    .map(|t| {
+                                        let datetime: chrono::DateTime<chrono::Local> = t.into();
+                                        datetime.format("%Y-%m-%d %H:%M").to_string()
+                                    }).unwrap_or_default();
+
+                                ui.horizontal(|ui| {
+                                    if ui.button(format!("💬 {}", filename)).clicked() {
+                                        self.create_and_open_session(path.clone(), control);
+                                    }
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        ui.weak(date_str);
+                                    });
+                                });
+                                ui.separator();
+                            }
                         });
-                        
-                        // Sanitize filename
-                        let safe_name = self.new_session_name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "_");
-                        let filename = format!("{}.toml", safe_name);
-                        let full_path = folder.join(filename);
-
-                        // 2. Create Object
-                        // Default to first mode and model
-                        let mode = self.get_available_modes().get(0).cloned().unwrap_or("Chat".into());
-                        let mut session = ChatSession::new(mode, "Gemini Pro".into());
-                        session.path = Some(full_path.clone());
-
-                        // 3. Save & Open
-                        if let Err(e) = session.save() {
-                             control.push(AppCommand::Notify { 
-                                 message: format!("Failed to create session: {}", e), 
-                                 level: crate::NotificationLevel::Error 
-                             });
-                        } else {
-                            self.create_and_open_session(full_path, control);
-                        }
                     }
 
-                    ui.separator();
-                    
-                    if ui.button("📂 Open Existing Session...").clicked() {
+                    ui.add_space(8.0);
+                    if ui.button("📂 Browse Files...").clicked() {
                          if let Some(path) = rfd::FileDialog::new().add_filter("TOML", &["toml"]).pick_file() {
                              self.create_and_open_session(path, control);
                          }
